@@ -172,35 +172,68 @@ class SBERTJittor(nn.Module):
     @staticmethod
     def _build_config(encoder_name: str) -> BertConfig:
         """Build BertConfig from encoder name"""
-        if 'base' in encoder_name.lower():
-            return BertConfig(
-                vocab_size=30522,
-                hidden_size=768,
-                num_hidden_layers=12,
-                num_attention_heads=12,
-                intermediate_size=3072,
-                hidden_dropout_prob=0.1,
-                attention_probs_dropout_prob=0.1,
-                max_position_embeddings=512,
-                type_vocab_size=2,
-                initializer_range=0.02,
-            )
-        elif 'large' in encoder_name.lower():
-            return BertConfig(
-                vocab_size=30522,
-                hidden_size=1024,
-                num_hidden_layers=24,
-                num_attention_heads=16,
-                intermediate_size=4096,
-                hidden_dropout_prob=0.1,
-                attention_probs_dropout_prob=0.1,
-                max_position_embeddings=512,
-                type_vocab_size=2,
-                initializer_range=0.02,
-            )
-        else:
-            # Default to base
-            return BertConfig()
+        encoder_lower = encoder_name.lower()
+
+        # RoBERTa models
+        if 'roberta' in encoder_lower:
+            if 'base' in encoder_lower:
+                return BertConfig(
+                    vocab_size=50265,  # RoBERTa vocab size
+                    hidden_size=768,
+                    num_hidden_layers=12,
+                    num_attention_heads=12,
+                    intermediate_size=3072,
+                    hidden_dropout_prob=0.1,
+                    attention_probs_dropout_prob=0.1,
+                    max_position_embeddings=514,  # RoBERTa uses 514
+                    type_vocab_size=1,  # RoBERTa doesn't use token type IDs
+                    initializer_range=0.02,
+                )
+            elif 'large' in encoder_lower:
+                return BertConfig(
+                    vocab_size=50265,
+                    hidden_size=1024,
+                    num_hidden_layers=24,
+                    num_attention_heads=16,
+                    intermediate_size=4096,
+                    hidden_dropout_prob=0.1,
+                    attention_probs_dropout_prob=0.1,
+                    max_position_embeddings=514,
+                    type_vocab_size=1,
+                    initializer_range=0.02,
+                )
+
+        # BERT models
+        elif 'bert' in encoder_lower:
+            if 'base' in encoder_lower:
+                return BertConfig(
+                    vocab_size=30522,
+                    hidden_size=768,
+                    num_hidden_layers=12,
+                    num_attention_heads=12,
+                    intermediate_size=3072,
+                    hidden_dropout_prob=0.1,
+                    attention_probs_dropout_prob=0.1,
+                    max_position_embeddings=512,
+                    type_vocab_size=2,
+                    initializer_range=0.02,
+                )
+            elif 'large' in encoder_lower:
+                return BertConfig(
+                    vocab_size=30522,
+                    hidden_size=1024,
+                    num_hidden_layers=24,
+                    num_attention_heads=16,
+                    intermediate_size=4096,
+                    hidden_dropout_prob=0.1,
+                    attention_probs_dropout_prob=0.1,
+                    max_position_embeddings=512,
+                    type_vocab_size=2,
+                    initializer_range=0.02,
+                )
+
+        # Default to BERT base
+        return BertConfig()
 
     def _build_head(
         self,

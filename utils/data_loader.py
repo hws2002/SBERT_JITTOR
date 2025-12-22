@@ -60,7 +60,7 @@ class STSbDataset(Dataset):
         """
         Args:
             data_path: STSb dataset path
-            split: 'train', 'dev', 'test' 
+            split: 'train', 'validation', 'test'
             max_length: maximum sequence length
         """
         self.dataset = load_from_disk(data_path)[split]
@@ -214,9 +214,9 @@ def load_sts_data(data_dir: str = './data',
     Args:
         data_dir: 데이터 디렉토리
         dataset_name: 'STS-B', 'STS12-16'
-        split: 
-            'train', 'dev', 'test' for STS-B
-            only test for STS14-16
+        split:
+            'train', 'validation', 'test' for STS-B
+            only 'test' for STS14-16
 
         batch_size: 배치 크기
 

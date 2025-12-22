@@ -64,15 +64,24 @@ Use the helper in `scripts/prepare_data.py` (or integrate HuggingFace `datasets`
 ### 3. Train SBERT (Jittor)
 
 ```bash
-python examples/train_nli.py \
-  --model_size base \
-  --epochs 1 \
-  --batch_size 64 \
-  --learning_rate 3e-5 \
-  --output_dir checkpoints/sbert_jittor_base
+ # 4. 전체 옵션
+  python train_nli.py bert-base-uncased \
+      --pooling mean \
+      --batch_size 16 \
+      --epochs 1 \
+      --eval_steps 1000 \
+      --save_steps 1000 \
+      --wandb \
+      --run_name "nli-v1" \
+      --use_cuda
+
+# 5. 사전학습 가중치 로드
+python train_nli.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --wandb
 ```
 
-Switch `--task` to `sts` for regression fine-tuning. The script uses Jittor’s AdamW optimizer and autograd, plus the vendored `BertModel`.
+The script uses Jittor’s AdamW optimizer and autograd, plus the vendored `BertModel`.
+
+huggingface sentence transformer의 훈련과정을 모방함.
 
 ### 4. Evaluate on STS benchmarks
 
