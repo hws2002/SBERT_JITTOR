@@ -78,7 +78,9 @@ Use the helper in `scripts/prepare_data.py` (or integrate HuggingFace `datasets`
 # 5. 사전학습 가중치 로드
 python train_nli.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --wandb
 ```
-
+```bash
+python train_nli_copy.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --max_steps 1 --skip_initial_eval
+```
 The script uses Jittor’s AdamW optimizer and autograd, plus the vendored `BertModel`.
 
 huggingface sentence transformer의 훈련과정을 모방함.

@@ -475,26 +475,39 @@ if __name__ == "__main__":
     print("Testing SBERT Jittor Models")
     print("=" * 70)
 
-    # 1. Basic SBERT with mean pooling
-    print("\n1. Basic SBERT (mean pooling, no head)")
+    # 1. Basic SBERT with mean pooling (BERT)
+    print("\n1. BERT-base SBERT (mean pooling, no head)")
     model1 = SBERTJittor('bert-base-uncased', pooling='mean', head_type='none')
     print(f"Output dim: {model1.output_dim}")
 
-    # 2. SBERT with linear projection
-    print("\n2. SBERT with linear projection head")
-    model2 = SBERTJittor('bert-base-uncased', pooling='mean', head_type='linear', output_dim=256)
+    # 2. RoBERTa SBERT
+    print("\n2. RoBERTa-base SBERT (mean pooling, no head)")
+    model2 = SBERTJittor('roberta-base', pooling='mean', head_type='none')
     print(f"Output dim: {model2.output_dim}")
+    print(f"Vocab size: {model2.config.vocab_size}")
+    print(f"Max position embeddings: {model2.config.max_position_embeddings}")
 
-    # 3. SBERT with MLP projection
-    print("\n3. SBERT with MLP projection head")
-    model3 = SBERTJittor('bert-base-uncased', pooling='mean', head_type='mlp', output_dim=128, num_layers=2)
+    # 3. SBERT with linear projection
+    print("\n3. SBERT with linear projection head")
+    model3 = SBERTJittor('bert-base-uncased', pooling='mean', head_type='linear', output_dim=256)
     print(f"Output dim: {model3.output_dim}")
 
-    # 4. SBERT for training (with classification head)
-    print("\n4. SBERT with classification head (for NLI training)")
-    model4 = SBERTWithClassification('bert-base-uncased', pooling='mean', num_labels=3)
-    print(f"Encoder output dim: {model4.sbert.output_dim}")
-    print(f"Num labels: {model4.num_labels}")
+    # 4. SBERT with MLP projection
+    print("\n4. SBERT with MLP projection head")
+    model4 = SBERTJittor('bert-base-uncased', pooling='mean', head_type='mlp', output_dim=128, num_layers=2)
+    print(f"Output dim: {model4.output_dim}")
+
+    # 5. SBERT for training (with classification head)
+    print("\n5. SBERT with classification head (for NLI training)")
+    model5 = SBERTWithClassification('bert-base-uncased', pooling='mean', num_labels=3)
+    print(f"Encoder output dim: {model5.sbert.output_dim}")
+    print(f"Num labels: {model5.num_labels}")
+
+    # 6. RoBERTa for training
+    print("\n6. RoBERTa with classification head (for NLI training)")
+    model6 = SBERTWithClassification('roberta-base', pooling='mean', num_labels=3)
+    print(f"Encoder output dim: {model6.sbert.output_dim}")
+    print(f"Num labels: {model6.num_labels}")
 
     print("\n" + "=" * 70)
     print("All tests completed!")
