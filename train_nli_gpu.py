@@ -365,6 +365,22 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
     return checkpoint_path
 
 
+def load_training_checkpoint(model, optimizer, checkpoint_path: str) -> tuple[int, int]:
+    logger.info(f"Loading training checkpoint: {checkpoint_path}")
+    checkpoint = jt.load(checkpoint_path)
+    model.load_state_dict(checkpoint["model_state"])
+    if optimizer is not None and "optimizer_state" in checkpoint:
+        try:
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+        except Exception as exc:
+            logger.warning(f"Failed to load optimizer state: {exc}")
+
+    global_step = int(checkpoint.get("iteration", 0))
+    start_epoch = max(int(checkpoint.get("epoch", 1)) - 1, 0)
+    logger.info(f"Resuming from step {global_step}, epoch {start_epoch + 1}")
+    return global_step, start_epoch
+
+
 def train(args):
     logger.info("=" * 70)
     logger.info("SBERT NLI Training (GPU-optimized)")
@@ -454,6 +470,13 @@ def train(args):
     logger.info("=" * 70)
 
     global_step = 0
+    start_epoch = 0
+    if args.start_from_checkpoints:
+        global_step, start_epoch = load_training_checkpoint(
+            model,
+            optimizer,
+            args.start_from_checkpoints,
+        )
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
@@ -461,7 +484,7 @@ def train(args):
 
     model.train()
 
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         epoch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
 
         for step, batch in enumerate(epoch_iterator, 1):
@@ -654,6 +677,8 @@ def parse_args():
                         help="Evaluate on STS benchmark every N steps")
     parser.add_argument("--save_steps", type=int, default=1000,
                         help="Save checkpoint every N steps (0 to disable)")
+    parser.add_argument("--start_from_checkpoints", type=str, default=None,
+                        help="Path to a saved checkpoint to resume training")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory for checkpoints")
 

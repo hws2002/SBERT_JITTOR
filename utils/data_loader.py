@@ -1,261 +1,202 @@
 """
-load NLI and STS dataset
+Cached NLI/STS dataset helpers with tokenizer-based preprocessing.
 """
 
 import os
-import torch
-from torch.utils.data import Dataset, DataLoader, ConcatDataset
-from datasets import load_from_disk
-from typing import List, Tuple, Dict
-import random
+from pathlib import Path
+from typing import Dict, Iterable, List
+
+import numpy as np
+from datasets import concatenate_datasets, load_from_disk
 
 
-class NLIDataset(Dataset):
-    """
-    Dataset made of SNLI or MultiNLI
-    """
-
-    def __init__(self, data_path: str, split: str = 'train', max_length: int = 128):
-        """
-        Args:
-            data_path: SNLI or MultiNLI dataset path
-            split: 
-                'train', 'validation', 'test' for SNLI
-                'train', 'validation_matched', 'validation_mismatched' for MultiNLI
-
-            max_length: max sequence length
-        """
-        self.dataset = load_from_disk(data_path)[split]
-        self.max_length = max_length
-
-        # label이 -1인 데이터 제거 (SNLI의 경우 일부 예제에 레이블 없음)
-        to_remove_len = len(self.dataset.filter(lambda x: x['label'] == -1))
-        self.dataset = self.dataset.filter(lambda x: x['label'] != -1)
-
-        print(f"Loaded {len(self.dataset)} examples from {data_path}/{split}")
-        print(f"Removed {to_remove_len} examples with label -1")
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        item = self.dataset[idx]
-
-        # SNLI: premise, hypothesis, label
-        # MultiNLI: premise, hypothesis, label
-        return {
-            'sentence1': item['premise'],
-            'sentence2': item['hypothesis'],
-            'label': item['label'] # 0 : entailment, 1 : neutral, 2 : contradiction
-        }
+def _safe_model_id(model_name: str) -> str:
+    return model_name.replace("/", "_")
 
 
-class STSbDataset(Dataset):
-    """
-    STSb (Semantic Textual Similarity) dataset
-    return : sentence pair and cosine similarity score (0-5 scale)
-    """
+def _cache_path(cache_dir: str, dataset_name: str, split: str, model_name: str, max_length: int) -> str:
+    model_id = _safe_model_id(model_name)
+    name = f"{dataset_name}_{split}_{model_id}_len{max_length}"
+    return os.path.join(cache_dir, name)
 
-    def __init__(self, data_path: str, split: str = 'test', max_length: int = 128):
-        """
-        Args:
-            data_path: STSb dataset path
-            split: 'train', 'validation', 'test'
-            max_length: maximum sequence length
-        """
-        self.dataset = load_from_disk(data_path)[split]
-        self.max_length = max_length
 
-        print(f"Loaded {len(self.dataset)} examples from {data_path}/{split}")
+def _tokenize_pair(
+    tokenizer,
+    sentences_a: List[str],
+    sentences_b: List[str],
+    max_length: int
+) -> Dict[str, List[List[int]]]:
+    enc_a = tokenizer(
+        sentences_a,
+        padding="max_length",
+        truncation=True,
+        max_length=max_length,
+    )
+    enc_b = tokenizer(
+        sentences_b,
+        padding="max_length",
+        truncation=True,
+        max_length=max_length,
+    )
 
-    def __len__(self):
-        return len(self.dataset)
+    out = {
+        "input_ids_a": enc_a["input_ids"],
+        "attention_mask_a": enc_a["attention_mask"],
+        "input_ids_b": enc_b["input_ids"],
+        "attention_mask_b": enc_b["attention_mask"],
+    }
 
-    def __getitem__(self, idx):
-        item = self.dataset[idx]
+    if "token_type_ids" in enc_a:
+        out["token_type_ids_a"] = enc_a["token_type_ids"]
+    if "token_type_ids" in enc_b:
+        out["token_type_ids_b"] = enc_b["token_type_ids"]
 
-        # STS-B: sentence1, sentence2, similarity_score (0-5)
-        return {
-            'sentence1': item['sentence1'],
-            'sentence2': item['sentence2'],
-            'score': float(item['score'])
-        }
+    return out
 
-class STSDataset(Dataset):
-    """
-    STS (Semantic Textual Similarity) dataset
-    return : sentence pair and cosine similarity score (0-5 scale)
-    """
 
-    def __init__(self, data_path: str, split: str = 'test', max_length: int = 128):
-        """
-        Args:
-            data_path: STSb dataset path
-            split: 
-                'test' for STS13-16 
-                'test','train' for STS-12
-            max_length: maximum sequence length
-        """
-        self.dataset = load_from_disk(data_path)[split]
-        self.max_length = max_length
-
-        print(f"Loaded {len(self.dataset)} examples from {data_path}/{split}")
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        item = self.dataset[idx]
-
-        return {
-            'sentence1': item['sentence1'],
-            'sentence2': item['sentence2'],
-            'score': float(item['score'])
-        }
-
-def load_nli_data(data_dir: str = './data',
-                  datasets: List[str] = ['SNLI', 'MultiNLI'],
-                  split: str = 'train',
-                  batch_size: int = 16,
-                  shuffle: bool = True,
-                  tokenizer=None,
-                  max_length: int = 128) -> DataLoader:
-    """
-    NLI dataset loader
-
-    Args:
-        data_dir: 
-        datasets: ['SNLI', 'MultiNLI']
-        split: 
-            'train', 'validation', 'test' if SNLI, 
-            'validation_matched' or 'validation_mismatched' for MultiNLI validation
-
-    Returns:
-        DataLoader
-    """
-
+def prepare_nli_dataset(
+    data_dir: str,
+    datasets: List[str],
+    split: str,
+    tokenizer,
+    max_length: int,
+    cache_dir: str,
+    overwrite_cache: bool,
+    tokenize_batch_size: int
+):
     def _map_split(dataset_name: str, requested_split: str) -> str:
-        if dataset_name.lower() in {'multinli', 'multi_nli', 'multi-nli'}:
-            if requested_split in {'train', 'validation_matched', 'validation_mismatched'}:
+        if dataset_name.lower() in {"multinli", "multi_nli", "multi-nli"}:
+            if requested_split in {"train", "validation_matched", "validation_mismatched"}:
                 return requested_split
-            if requested_split in {'validation', 'dev'}:
-                return 'validation_matched'
-            if requested_split == 'test':
-                return 'validation_mismatched'
+            if requested_split in {"validation", "dev"}:
+                return "validation_matched"
+            if requested_split == "test":
+                return "validation_mismatched"
             raise ValueError(
                 f"Unsupported split '{requested_split}' for MultiNLI. "
-                "Use train / validation_matched / validation_mismatched (or pass validation/test for auto-mapping)."
+                "Use train / validation_matched / validation_mismatched."
             )
 
-        if dataset_name.lower() == 'snli':
-            if requested_split in {'train', 'validation', 'test'}:
+        if dataset_name.lower() == "snli":
+            if requested_split in {"train", "validation", "test"}:
                 return requested_split
-            if requested_split in {'validation_matched', 'dev'}:
-                return 'validation'
-            if requested_split == 'validation_mismatched':
-                return 'test'
+            if requested_split in {"validation_matched", "dev"}:
+                return "validation"
+            if requested_split == "validation_mismatched":
+                return "test"
             raise ValueError(
                 f"Unsupported split '{requested_split}' for SNLI. Use train / validation / test."
             )
 
         return requested_split
 
-    dataset_objs: List[NLIDataset] = []
-    total_len = 0
+    tokenized_datasets = []
+
     for dataset_name in datasets:
         data_path = os.path.join(data_dir, dataset_name)
         actual_split = _map_split(dataset_name, split)
-        ds = NLIDataset(data_path, split=actual_split)
-        dataset_objs.append(ds)
-        total_len += len(ds)
+        raw_ds = load_from_disk(data_path)[actual_split]
+        raw_ds = raw_ds.filter(lambda x: x["label"] != -1)
 
-    combined = ConcatDataset(dataset_objs)
-    print(f"\nTotal {split} examples: {total_len}")
+        cache_path = _cache_path(cache_dir, dataset_name, actual_split, tokenizer.name_or_path, max_length)
+        if os.path.isdir(cache_path) and not overwrite_cache:
+            tokenized = load_from_disk(cache_path)
+        else:
+            def tokenize_fn(batch):
+                tok = _tokenize_pair(
+                    tokenizer,
+                    batch["premise"],
+                    batch["hypothesis"],
+                    max_length
+                )
+                tok["labels"] = batch["label"]
+                return tok
 
-    # Custom collate function
-    def collate_fn(batch):
-        sentence1 = [item['sentence1'] for item in batch]
-        sentence2 = [item['sentence2'] for item in batch]
-        labels = torch.tensor([item['label'] for item in batch])
+            tokenized = raw_ds.map(
+                tokenize_fn,
+                batched=True,
+                batch_size=tokenize_batch_size,
+                remove_columns=raw_ds.column_names,
+                desc=f"Tokenizing {dataset_name}/{actual_split}"
+            )
+            Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+            tokenized.save_to_disk(cache_path)
 
-        if tokenizer is None:
-            return {
-                'sentence1': sentence1,
-                'sentence2': sentence2,
-                'labels': labels
-            }
+        tokenized_datasets.append(tokenized)
 
-        enc = tokenizer(
-            sentence1,
-            sentence2,
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-            return_tensors='pt'
-        )
-        out = dict(enc)
-        out['sentence1'] = sentence1
-        out['sentence2'] = sentence2
-        out['labels'] = labels
-        return out
-
-    return DataLoader(combined, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn)
+    if len(tokenized_datasets) == 1:
+        return tokenized_datasets[0]
+    return concatenate_datasets(tokenized_datasets)
 
 
-def load_sts_data(data_dir: str = './data',
-                  dataset_name: str = 'STS-B',
-                  split: str = 'test',
-                  batch_size: int = 16,
-                  tokenizer=None,
-                  max_length: int = 128) -> DataLoader:
-    """
-    STS 데이터셋 로더
-
-    Args:
-        data_dir: 데이터 디렉토리
-        dataset_name: 'STS-B', 'STS12-16'
-        split:
-            'train', 'validation', 'test' for STS-B
-            only 'test' for STS14-16
-
-        batch_size: 배치 크기
-
-    Returns:
-        DataLoader
-    """
+def prepare_sts_dataset(
+    data_dir: str,
+    dataset_name: str,
+    split: str,
+    tokenizer,
+    max_length: int,
+    cache_dir: str,
+    overwrite_cache: bool,
+    tokenize_batch_size: int
+):
     data_path = os.path.join(data_dir, dataset_name)
-    if dataset_name == "STS-B":
-        dataset = STSbDataset(data_path, split=split)
-    else:
-        dataset = STSDataset(data_path, split=split)
+    raw_ds = load_from_disk(data_path)[split]
 
-    def collate_fn(batch):
-        sentence1 = [item['sentence1'] for item in batch]
-        sentence2 = [item['sentence2'] for item in batch]
-        scores = torch.tensor([item['score'] for item in batch], dtype=torch.float)
+    cache_path = _cache_path(cache_dir, dataset_name, split, tokenizer.name_or_path, max_length)
+    if os.path.isdir(cache_path) and not overwrite_cache:
+        return load_from_disk(cache_path)
 
-        if tokenizer is None:
-            return {
-                'sentence1': sentence1,
-                'sentence2': sentence2,
-                'scores': scores
-            }
-
-        enc = tokenizer(
-            sentence1,
-            sentence2,
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-            return_tensors='pt'
+    def tokenize_fn(batch):
+        tok = _tokenize_pair(
+            tokenizer,
+            batch["sentence1"],
+            batch["sentence2"],
+            max_length
         )
-        out = dict(enc)
-        out['sentence1'] = sentence1
-        out['sentence2'] = sentence2
-        out['scores'] = scores
-        return out
+        tok["scores"] = batch["score"]
+        return tok
 
-    return DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    tokenized = raw_ds.map(
+        tokenize_fn,
+        batched=True,
+        batch_size=tokenize_batch_size,
+        remove_columns=raw_ds.column_names,
+        desc=f"Tokenizing {dataset_name}/{split}"
+    )
+    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+    tokenized.save_to_disk(cache_path)
+    return tokenized
 
 
+def collate_nli(batch: List[Dict]) -> Dict[str, np.ndarray]:
+    out = {
+        "input_ids_a": np.asarray([b["input_ids_a"] for b in batch], dtype=np.int32),
+        "attention_mask_a": np.asarray([b["attention_mask_a"] for b in batch], dtype=np.float32),
+        "input_ids_b": np.asarray([b["input_ids_b"] for b in batch], dtype=np.int32),
+        "attention_mask_b": np.asarray([b["attention_mask_b"] for b in batch], dtype=np.float32),
+        "labels": np.asarray([b["labels"] for b in batch], dtype=np.int32),
+    }
 
+    if "token_type_ids_a" in batch[0]:
+        out["token_type_ids_a"] = np.asarray([b["token_type_ids_a"] for b in batch], dtype=np.int32)
+    if "token_type_ids_b" in batch[0]:
+        out["token_type_ids_b"] = np.asarray([b["token_type_ids_b"] for b in batch], dtype=np.int32)
+
+    return out
+
+
+def collate_sts(batch: List[Dict]) -> Dict[str, np.ndarray]:
+    out = {
+        "input_ids_a": np.asarray([b["input_ids_a"] for b in batch], dtype=np.int32),
+        "attention_mask_a": np.asarray([b["attention_mask_a"] for b in batch], dtype=np.float32),
+        "input_ids_b": np.asarray([b["input_ids_b"] for b in batch], dtype=np.int32),
+        "attention_mask_b": np.asarray([b["attention_mask_b"] for b in batch], dtype=np.float32),
+        "scores": np.asarray([b["scores"] for b in batch], dtype=np.float32),
+    }
+
+    if "token_type_ids_a" in batch[0]:
+        out["token_type_ids_a"] = np.asarray([b["token_type_ids_a"] for b in batch], dtype=np.int32)
+    if "token_type_ids_b" in batch[0]:
+        out["token_type_ids_b"] = np.asarray([b["token_type_ids_b"] for b in batch], dtype=np.int32)
+
+    return out

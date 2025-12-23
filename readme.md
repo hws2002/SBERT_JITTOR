@@ -73,11 +73,17 @@ python utils/download_checkpoints.py
       --run_name "nli-v1" \
       --use_cuda
 
-# 사전학습 가중치 로드
+# (local)
 python train_nli.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --wandb
 
 # on gpu server
-python train_nli_gpu.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --cache_dir ./data/tokenized --pooling mean --use_cuda --wandb
+python train_nli_gpu.py bert-large-uncased --tokenizer_path /root/shared-nvme/hf/bert-large-uncased --encoder_checkpoint /root/shared-nvme/checkpoints/hf_bert_large/pytorch_model.bin --data_dir /root/shared-nvme/data --cache_dir /root/shared-nvme/data/tokenized --pooling mean --use_cuda --wandb  
+
+# symbolic
+python train_nli_gpu.py bert-large-uncased --tokenizer_path ./hf/bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --data_dir ./data --cache_dir ./data/tokenized --pooling mean --use_cuda --wandb    
+
+# 중간부터 시작
+python train_nli_gpu.py bert-large-uncased --tokenizer_path /root/shared-nvme/hf/bert-large-uncased --encoder_checkpoint /root/shared-nvme/checkpoints/hf_bert_large/pytorch_model.bin --data_dir /root/shared-nvme/data --cache_dir /root/shared-nvme/data/tokenized --pooling mean --use_cuda --output_dir /shared-public/output --save_steps 5000 --start_from_checkpoints /shared-public/output/training_nli_bert-large-uncased-2025-12-23_18-00-09/best_step1000.pkl
 ```
 
 ```bash

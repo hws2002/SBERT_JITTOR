@@ -23,11 +23,18 @@ from datetime import datetime
 from typing import Dict, Iterable, List
 
 import jittor as jt
+import numpy as np
 from jittor import nn
 from tqdm import tqdm
 from transformers import AutoTokenizer
+from torch.utils.data import DataLoader
 
-from utils.data_loader import load_nli_data, load_sts_data
+from utils.data_loader import (
+    collate_nli,
+    collate_sts,
+    prepare_nli_dataset,
+    prepare_sts_dataset,
+)
 from model.sbert_model import SBERTWithClassification
 
 # Set the log level to INFO
@@ -40,51 +47,43 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _convert_tensor(tensor, dtype: str = "float32"):
-    """Convert PyTorch tensor to Jittor array"""
-    np_val = tensor.detach().cpu().numpy()
-    if dtype == "int32":
-        np_val = np_val.astype("int32")
-    return jt.array(np_val)
+def _jt_array(data, dtype: str):
+    return jt.array(np.asarray(data, dtype=dtype))
 
 
-def tokenize_sentences(tokenizer, sentences: List[str], max_length: int):
-    """Tokenize sentences and convert to Jittor arrays"""
-    encoded = tokenizer(
-        sentences,
-        padding=True,
-        truncation=True,
-        max_length=max_length,
-        return_tensors="pt",
-    )
-    return {
-        "input_ids": jt.array(encoded["input_ids"].detach().cpu().numpy().astype("int32")),
-        "attention_mask": jt.array(encoded["attention_mask"].detach().cpu().numpy().astype("float32")),
-        "token_type_ids": jt.array(encoded["token_type_ids"].detach().cpu().numpy().astype("int32"))
-        if "token_type_ids" in encoded
-        else None,
+def _to_jittor_batch(batch: Dict[str, Iterable], for_sts: bool = False) -> Dict[str, jt.Var]:
+    out: Dict[str, jt.Var] = {
+        "input_ids_a": _jt_array(batch["input_ids_a"], "int32"),
+        "attention_mask_a": _jt_array(batch["attention_mask_a"], "float32"),
+        "input_ids_b": _jt_array(batch["input_ids_b"], "int32"),
+        "attention_mask_b": _jt_array(batch["attention_mask_b"], "float32"),
     }
 
+    if "token_type_ids_a" in batch:
+        out["token_type_ids_a"] = _jt_array(batch["token_type_ids_a"], "int32")
+    if "token_type_ids_b" in batch:
+        out["token_type_ids_b"] = _jt_array(batch["token_type_ids_b"], "int32")
 
-def make_batch(tokenizer, batch: Dict[str, Iterable[str]], max_length: int):
-    """Prepare batch for training"""
-    enc_a = tokenize_sentences(tokenizer, batch["sentence1"], max_length)
-    enc_b = tokenize_sentences(tokenizer, batch["sentence2"], max_length)
-    labels = _convert_tensor(batch["labels"], dtype="int32")
+    if for_sts:
+        out["scores"] = _jt_array(batch["scores"], "float32")
+    else:
+        out["labels"] = _jt_array(batch["labels"], "int32")
 
-    jt_batch = {
-        "input_ids_a": enc_a["input_ids"],
-        "attention_mask_a": enc_a["attention_mask"],
-        "token_type_ids_a": enc_a["token_type_ids"],
-        "input_ids_b": enc_b["input_ids"],
-        "attention_mask_b": enc_b["attention_mask"],
-        "token_type_ids_b": enc_b["token_type_ids"],
-        "labels": labels,
-    }
-    return jt_batch
+    return out
 
 
-def evaluate_sts(model, tokenizer, data_dir, dataset_name='STS-B', split='validation', max_length=128):
+def evaluate_sts(
+    model,
+    tokenizer,
+    data_dir,
+    dataset_name="STS-B",
+    split="validation",
+    max_length=128,
+    cache_dir="./data/tokenized",
+    overwrite_cache=False,
+    tokenize_batch_size=1024,
+    num_workers=4,
+):
     """
     Evaluate model on STS benchmark dataset
 
@@ -98,14 +97,22 @@ def evaluate_sts(model, tokenizer, data_dir, dataset_name='STS-B', split='valida
 
     model.eval()
 
-    # Load STS data
-    dataloader = load_sts_data(
+    sts_dataset = prepare_sts_dataset(
         data_dir=data_dir,
         dataset_name=dataset_name,
         split=split,
+        tokenizer=tokenizer,
+        max_length=max_length,
+        cache_dir=cache_dir,
+        overwrite_cache=overwrite_cache,
+        tokenize_batch_size=tokenize_batch_size,
+    )
+    dataloader = DataLoader(
+        sts_dataset,
         batch_size=32,
-        tokenizer=None,
-        max_length=max_length
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_sts,
     )
 
     all_predictions = []
@@ -113,24 +120,16 @@ def evaluate_sts(model, tokenizer, data_dir, dataset_name='STS-B', split='valida
 
     with jt.no_grad():
         for batch in tqdm(dataloader, desc=f"Evaluating {dataset_name}", leave=False):
-            sentences1 = batch['sentence1']
-            sentences2 = batch['sentence2']
-            scores = batch['scores']
-
-            # Encode sentences
-            enc_a = tokenize_sentences(tokenizer, sentences1, max_length)
-            enc_b = tokenize_sentences(tokenizer, sentences2, max_length)
-
-            # Get embeddings
+            jt_batch = _to_jittor_batch(batch, for_sts=True)
             emb_a = model.encode(
-                enc_a['input_ids'],
-                enc_a['attention_mask'],
-                enc_a.get('token_type_ids', None)
+                jt_batch["input_ids_a"],
+                jt_batch["attention_mask_a"],
+                jt_batch.get("token_type_ids_a", None)
             )
             emb_b = model.encode(
-                enc_b['input_ids'],
-                enc_b['attention_mask'],
-                enc_b.get('token_type_ids', None)
+                jt_batch["input_ids_b"],
+                jt_batch["attention_mask_b"],
+                jt_batch.get("token_type_ids_b", None)
             )
 
             # Compute cosine similarity
@@ -142,7 +141,7 @@ def evaluate_sts(model, tokenizer, data_dir, dataset_name='STS-B', split='valida
             sim = np.sum(emb_a_np * emb_b_np, axis=1) / denom
 
             all_predictions.extend(sim.tolist())
-            all_scores.extend(scores.cpu().numpy().tolist())
+            all_scores.extend(np.asarray(batch["scores"]).tolist())
 
     # Compute correlations
     pearson_corr, _ = pearsonr(all_predictions, all_scores)
@@ -201,6 +200,16 @@ def setup_wandb(args):
         return None
 
 
+def resolve_encoder_checkpoint(args) -> str | None:
+    if args.encoder_checkpoint:
+        return args.encoder_checkpoint
+    candidate = os.path.join(args.hf_checkpoint_dir, args.base_model, "pytorch_model.bin")
+    if os.path.isfile(candidate):
+        logger.info(f"Using encoder checkpoint: {candidate}")
+        return candidate
+    return None
+
+
 def save_checkpoint(model, optimizer, iteration, epoch, args, name='checkpoint'):
     """Save model checkpoint"""
     output_dir = Path(args.output_dir)
@@ -251,16 +260,26 @@ def train(args):
     logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
 
+    cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
+
     # 2. Load NLI training data
     logger.info("Loading NLI training data...")
-    train_dataloader = load_nli_data(
+    train_dataset = prepare_nli_dataset(
         data_dir=args.data_dir,
         datasets=args.datasets,
-        split='train',
+        split="train",
+        tokenizer=tokenizer,
+        max_length=args.max_length,
+        cache_dir=cache_dir,
+        overwrite_cache=args.overwrite_cache,
+        tokenize_batch_size=args.tokenize_batch_size,
+    )
+    train_dataloader = DataLoader(
+        train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        tokenizer=None,
-        max_length=args.max_length,
+        num_workers=args.num_workers,
+        collate_fn=collate_nli,
     )
 
     total_steps = args.epochs * len(train_dataloader)
@@ -275,7 +294,7 @@ def train(args):
         encoder_name=args.base_model,
         pooling=args.pooling,
         num_labels=args.num_labels,
-        checkpoint_path=args.encoder_checkpoint,
+        checkpoint_path=resolve_encoder_checkpoint(args),
     )
     logger.info(f"Model embedding dimension: {model.sbert.output_dim}")
 
@@ -287,13 +306,17 @@ def train(args):
     # 5. Evaluation before training
     logger.info("\nEvaluation before training:")
     eval_results_before = evaluate_sts(
-        model=model.sbert,
-        tokenizer=tokenizer,
-        data_dir=args.data_dir,
-        dataset_name='STS-B',
-        split='validation',
-        max_length=args.max_length
-    )
+            model=model.sbert,
+            tokenizer=tokenizer,
+            data_dir=args.data_dir,
+            dataset_name='STS-B',
+            split='validation',
+            max_length=args.max_length,
+            cache_dir=cache_dir,
+            overwrite_cache=args.overwrite_cache,
+            tokenize_batch_size=args.tokenize_batch_size,
+            num_workers=args.num_workers,
+        )
 
     # 6. Training loop
     logger.info("\nStarting training...")
@@ -312,7 +335,7 @@ def train(args):
 
         for step, batch in enumerate(epoch_iterator, 1):
             # Prepare batch
-            jt_batch = make_batch(tokenizer, batch, args.max_length)
+            jt_batch = _to_jittor_batch(batch, for_sts=False)
             labels = jt_batch["labels"]
 
             # Forward pass
@@ -378,7 +401,11 @@ def train(args):
                     data_dir=args.data_dir,
                     dataset_name='STS-B',
                     split='validation',
-                    max_length=args.max_length
+                    max_length=args.max_length,
+                    cache_dir=cache_dir,
+                    overwrite_cache=args.overwrite_cache,
+                    tokenize_batch_size=args.tokenize_batch_size,
+                    num_workers=args.num_workers,
                 )
 
                 if wandb:
@@ -429,7 +456,11 @@ def train(args):
         data_dir=args.data_dir,
         dataset_name='STS-B',
         split='test',
-        max_length=args.max_length
+        max_length=args.max_length,
+        cache_dir=cache_dir,
+        overwrite_cache=args.overwrite_cache,
+        tokenize_batch_size=args.tokenize_batch_size,
+        num_workers=args.num_workers,
     )
 
     if wandb:
@@ -480,6 +511,8 @@ def parse_args():
                         help="Pooling strategy")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
+    parser.add_argument("--hf_checkpoint_dir", type=str, default="./hf/pretrained_bert_checkpoints",
+                        help="Base directory containing pretrained HF checkpoints")
     parser.add_argument("--num_labels", type=int, default=3,
                         help="Number of NLI classification labels")
 
@@ -490,6 +523,12 @@ def parse_args():
                         help="NLI datasets to use")
     parser.add_argument("--max_length", type=int, default=128,
                         help="Maximum sequence length")
+    parser.add_argument("--cache_dir", type=str, default="./data/tokenized",
+                        help="Cache directory for tokenized datasets")
+    parser.add_argument("--overwrite_cache", action="store_true",
+                        help="Overwrite existing cached datasets")
+    parser.add_argument("--tokenize_batch_size", type=int, default=1024,
+                        help="Batch size used during dataset tokenization")
 
     # Training arguments
     parser.add_argument("--batch_size", type=int, default=16,
@@ -504,6 +543,8 @@ def parse_args():
     # Device
     parser.add_argument("--use_cuda", action="store_true",
                         help="Use CUDA if available")
+    parser.add_argument("--num_workers", type=int, default=4,
+                        help="DataLoader worker processes")
 
     # Logging and evaluation
     parser.add_argument("--log_steps", type=int, default=100,
@@ -529,7 +570,7 @@ def parse_args():
     if args.output_dir is None:
         model_name = args.base_model.replace("/", "-")
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        args.output_dir = f"output/training_nli_{model_name}-{timestamp}"
+        args.output_dir = f"checkpoints/training_nli_{model_name}-{timestamp}"
 
     return args
 

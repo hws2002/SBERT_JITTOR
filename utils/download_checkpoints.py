@@ -5,7 +5,7 @@ and store them in a local directory.
 Usage:
     python utils/download_checkpoints.py \
         --model-name bert-large-uncased \
-        --output-dir ./hf_bert_large \
+        --output-dir ./hf/pretrained_bert_checkpoints/bert-large-uncased \
         --safe-serialization
 """
 
@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="./hf_bert_base",
+        default=None,
         help="Directory to store the downloaded checkpoint",
     )
     parser.add_argument(
@@ -45,7 +45,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    output_path = Path(args.output_dir)
+    output_root = args.output_dir or f"./hf/pretrained_bert_checkpoints/{args.model_name}"
+    output_path = Path(output_root)
     output_path.mkdir(parents=True, exist_ok=True)
 
     print(f"Downloading model: {args.model_name}")
