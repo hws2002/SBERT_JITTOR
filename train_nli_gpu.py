@@ -384,8 +384,9 @@ def train(args):
     setup_device(args.use_cuda)
     wandb = setup_wandb(args)
 
-    logger.info("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
+    tokenizer_source = args.tokenizer_path or args.base_model
+    logger.info(f"Loading tokenizer from: {tokenizer_source}")
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
 
     cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
 
@@ -621,6 +622,8 @@ def parse_args():
                         help="Pooling strategy")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
+    parser.add_argument("--tokenizer_path", type=str, default=None,
+                        help="Local path to a tokenizer directory (overrides base_model for tokenization)")
     parser.add_argument("--num_labels", type=int, default=3,
                         help="Number of NLI classification labels")
 
