@@ -348,7 +348,12 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_path = output_dir / f"{name}_step{iteration}.pkl"
+    if name == "best":
+        checkpoint_path = output_dir / "best.pkl"
+    elif name == "checkpoint":
+        checkpoint_path = output_dir / "checkpoint_latest.pkl"
+    else:
+        checkpoint_path = output_dir / f"{name}_step{iteration}.pkl"
 
     checkpoint = {
         "iteration": iteration,

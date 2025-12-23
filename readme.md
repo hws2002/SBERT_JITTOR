@@ -83,7 +83,7 @@ python train_nli_gpu.py bert-large-uncased --tokenizer_path /root/shared-nvme/hf
 python train_nli_gpu.py bert-large-uncased --tokenizer_path ./hf/bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --data_dir ./data --cache_dir ./data/tokenized --pooling mean --use_cuda --wandb    
 
 # 중간부터 시작
-python train_nli_gpu.py bert-large-uncased --tokenizer_path /root/shared-nvme/hf/bert-large-uncased --encoder_checkpoint /root/shared-nvme/checkpoints/hf_bert_large/pytorch_model.bin --data_dir /root/shared-nvme/data --cache_dir /root/shared-nvme/data/tokenized --pooling mean --use_cuda --output_dir /shared-public/output --save_steps 5000 --start_from_checkpoints /shared-public/output/training_nli_bert-large-uncased-2025-12-23_18-00-09/best_step1000.pkl
+python train_nli_gpu.py bert-large-uncased --tokenizer_path /root/shared-nvme/hf/bert-large-uncased --encoder_checkpoint /root/shared-nvme/checkpoints/hf_bert_large/pytorch_model.bin --data_dir /root/shared-nvme/data --cache_dir /root/shared-nvme/data/tokenized --pooling mean --use_cuda --output_dir /shared-public/output --save_steps 5000 --start_from_checkpoints /root/shared-nvme/output/training_nli_bert-large-uncased-2025-12-23_18-00-09/best_step2000.pkl
 ```
 
 ```bash
