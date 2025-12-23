@@ -656,7 +656,7 @@ def parse_args():
 
     parser.add_argument("--num_workers", type=int, default=4,
                         help="DataLoader worker processes")
-    parser.add_argument("--cache_dir", type=str, default=None,
+    parser.add_argument("--cache_dir", type=str, default='./data/tokenized',
                         help="Cache directory for tokenized datasets (default: data_dir/_cache)")
     parser.add_argument("--overwrite_cache", action="store_true",
                         help="Overwrite existing cached datasets")

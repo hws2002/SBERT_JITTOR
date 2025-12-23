@@ -77,7 +77,7 @@ python utils/download_checkpoints.py
 python train_nli.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --wandb
 
 # on gpu server
-python train_nli.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --use_cuda --wandb
+python train_nli_gpu.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --cache_dir ./data/tokenized --pooling mean --use_cuda --wandb
 ```
 
 ```bash
