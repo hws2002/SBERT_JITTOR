@@ -84,7 +84,7 @@ def make_batch(tokenizer, batch: Dict[str, Iterable[str]], max_length: int):
     return jt_batch
 
 
-def evaluate_sts(model, tokenizer, data_dir, dataset_name='STS-B', split='dev', max_length=128):
+def evaluate_sts(model, tokenizer, data_dir, dataset_name='STS-B', split='validation', max_length=128):
     """
     Evaluate model on STS benchmark dataset
 
@@ -267,7 +267,12 @@ def train(args):
     if total_steps == 0:
         raise RuntimeError("No training data found. Check data_dir/datasets arguments.")
 
-    logger.info(f"Total training steps: {total_steps}")
+    # Override total_steps if max_steps is set
+    if args.max_steps > 0:
+        total_steps = args.max_steps
+        logger.info(f"Max training steps (limited): {total_steps}")
+    else:
+        logger.info(f"Total training steps: {total_steps}")
 
     # 3. Create model with SoftmaxLoss (Cross-entropy)
     logger.info("Initializing SBERT model...")
@@ -285,15 +290,20 @@ def train(args):
     logger.info(f"Warmup steps: {warmup_steps}")
 
     # 5. Evaluation before training
-    logger.info("\nEvaluation before training:")
-    eval_results_before = evaluate_sts(
-        model=model.sbert,
-        tokenizer=tokenizer,
-        data_dir=args.data_dir,
-        dataset_name='STS-B',
-        split='dev',
-        max_length=args.max_length
-    )
+    if args.skip_initial_eval:
+        logger.info("\nSkipping initial evaluation (--skip_initial_eval)")
+        best_spearman = 0.0
+    else:
+        logger.info("\nEvaluation before training:")
+        eval_results_before = evaluate_sts(
+            model=model.sbert,
+            tokenizer=tokenizer,
+            data_dir=args.data_dir,
+            dataset_name='STS-B',
+            split='validation',
+            max_length=args.max_length
+        )
+        best_spearman = eval_results_before['spearman']
 
     # 6. Training loop
     logger.info("\nStarting training...")
@@ -303,7 +313,6 @@ def train(args):
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
-    best_spearman = eval_results_before['spearman']
 
     model.train()
 
@@ -377,7 +386,7 @@ def train(args):
                     tokenizer=tokenizer,
                     data_dir=args.data_dir,
                     dataset_name='STS-B',
-                    split='dev',
+                    split='validation',
                     max_length=args.max_length
                 )
 
@@ -396,6 +405,15 @@ def train(args):
             # Save checkpoint periodically
             if args.save_steps > 0 and global_step % args.save_steps == 0:
                 save_checkpoint(model, optimizer, global_step, epoch+1, args, name='checkpoint')
+
+            # Check if max_steps reached
+            if args.max_steps > 0 and global_step >= args.max_steps:
+                logger.info(f"\nReached max_steps ({args.max_steps}). Stopping training.")
+                break
+
+        # Check if max_steps reached (break outer loop)
+        if args.max_steps > 0 and global_step >= args.max_steps:
+            break
 
         # Epoch summary
         avg_loss = total_loss / total_samples
@@ -474,7 +492,7 @@ def parse_args():
 
     # Model arguments
     parser.add_argument("base_model", nargs="?", default="bert-base-uncased",
-                        help="Base encoder model (bert-base-uncased, bert-large-uncased, etc.)")
+                        help="Base encoder model (bert-base-uncased, bert-large-uncased, roberta-base, roberta-large)")
     parser.add_argument("--pooling", default="mean",
                         choices=["mean", "cls", "max"],
                         help="Pooling strategy")
@@ -496,6 +514,8 @@ def parse_args():
                         help="Training batch size")
     parser.add_argument("--epochs", type=int, default=1,
                         help="Number of training epochs")
+    parser.add_argument("--max_steps", type=int, default=-1,
+                        help="Maximum training steps (overrides epochs, -1 for no limit)")
     parser.add_argument("--lr", type=float, default=2e-5,
                         help="Learning rate")
     parser.add_argument("--warmup_ratio", type=float, default=0.1,
@@ -510,6 +530,8 @@ def parse_args():
                         help="Log metrics every N steps")
     parser.add_argument("--eval_steps", type=int, default=1000,
                         help="Evaluate on STS benchmark every N steps")
+    parser.add_argument("--skip_initial_eval", action="store_true",
+                        help="Skip evaluation before training (faster startup)")
     parser.add_argument("--save_steps", type=int, default=1000,
                         help="Save checkpoint every N steps (0 to disable)")
     parser.add_argument("--output_dir", type=str, default=None,

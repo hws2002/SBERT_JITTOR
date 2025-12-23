@@ -47,24 +47,22 @@ sudo apt update && sudo apt install -y build-essential
 
 If Jittor cannot find `g++`, set `export cc_path=/usr/bin/g++` (or the correct path on your system). On Windows install the latest MSVC build tools.
 
-## Quick Start
+## Training SBERT
 
-### 1. Inspect the Jittor BERT backbone
+### 1. Prepare datasets and checkpoints
 
 ```bash
-python playground/bert_base_jittor_demo.py
+python utils/download_data.py
 ```
 
-Prints the canonical `bert-base-uncased` config, model summary, total parameters, and verifies a dummy forward pass.
-
-### 2. Prepare datasets
-
-Use the helper in `scripts/prepare_data.py` (or integrate HuggingFace `datasets`) to download SNLI/MNLI + STS-B. Set `HF_HOME` if you need a custom cache path.
+```bash
+python utils/download_checkpoints.py
+```
 
 ### 3. Train SBERT (Jittor)
 
 ```bash
- # 4. 전체 옵션
+ # 전체 옵션
   python train_nli.py bert-base-uncased \
       --pooling mean \
       --batch_size 16 \
@@ -75,9 +73,13 @@ Use the helper in `scripts/prepare_data.py` (or integrate HuggingFace `datasets`
       --run_name "nli-v1" \
       --use_cuda
 
-# 5. 사전학습 가중치 로드
+# 사전학습 가중치 로드
 python train_nli.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --wandb
+
+# on gpu server
+python train_nli.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --use_cuda --wandb
 ```
+
 ```bash
 python train_nli_copy.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --max_steps 1 --skip_initial_eval
 ```
