@@ -26,7 +26,7 @@ def _parse_args():
     parser.add_argument(
         "--local_dir",
         default=None,
-        help="Destination directory (default: ./hf/<repo_id>).",
+        help="Destination directory (default: ./hf/tokenizer/<repo_id>).",
     )
     parser.add_argument(
         "--force",
@@ -38,7 +38,7 @@ def _parse_args():
 
 def main():
     args = _parse_args()
-    local_dir = args.local_dir or f"./hf/{args.repo_id}"
+    local_dir = args.local_dir or f"./hf/tokenizer/{args.repo_id}"
     target = Path(local_dir)
     if target.exists() and any(target.iterdir()) and not args.force:
         raise SystemExit(

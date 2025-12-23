@@ -2,128 +2,156 @@
 
 # SBERT-Jittor
 
-Pure Jittor implementation of Sentence-BERT (SBERT) distributed as a standalone open-source library.
+Sentence-BERT implemented in Jittor with a full NLI training pipeline.
 
 </div>
 
 ## Overview
 
-SBERT-Jittor vendors the original Google BERT architecture (Apache-2.0) into the [Jittor](https://jittor.org) deep-learning framework and layers SBERT pooling / siamese training utilities on top. The core BERT implementation is adapted from [LetianLee/BERT-Jittor](https://github.com/LetianLee/BERT-Jittor) and redistributed here under the same Apache-2.0 terms. This repository is intended to be the **library / toolkit** that other projects can import.
+This project reimplements Sentence-BERT in pure Jittor. It vendors a Jittor-native
+BERT encoder, adds SBERT pooling heads, and provides training/evaluation scripts
+to reproduce the standard NLI -> STS workflow. The goal is a self-contained,
+open-source SBERT stack that trains end-to-end in Jittor.
 
-Goals:
+The Jittor BERT implementation is adapted from
+https://github.com/LetianLee/BERT-Jittor and follows the Apache 2.0 license.
 
-- Deliver a **pure-Jittor Transformer stack** (no PyTorch dependency for the training/eval core).
-- Provide **Sentence-BERT style pooling + encode APIs** that mirror HuggingFace/SentenceTransformers.
-- Ship **reference examples & playgrounds** demonstrating how to plug the modules into real training scripts.
-- Capture **licensing & environment guidance** so downstream consumers can safely redistribute.
+## What is implemented
 
-## Repository Structure
+- **Encoder**: Jittor BERT (BertConfig, BertModel) adapted from BERT-Jittor.
+- **Pooling**: mean / cls / max pooling to produce sentence embeddings.
+- **Heads**:
+  - Identity (no projection)
+  - Linear projection
+  - MLP projection
+  - Classification head for NLI training
+- **Training**: NLI (SNLI + MultiNLI) with periodic STS evaluation.
+- **Evaluation**: STS12-16, STS-B, SICK-R with Pearson/Spearman.
+
+## Repository layout
 
 ```
 SBERT_JITTOR/
-├── model/                      # Vendored core BERT (BertConfig, BertModel, heads, etc.)
-├── sbert/                      # Sentence-level pooling & siamese wrappers (CLS/mean/max, etc.)
-├── examples/                   # Reference scripts (train_nli.py, train_sts.py, evaluate_sts.py)
-├── playground/                 # Small demos: transformer block, config inspectors, etc.
-├── scripts/                    # Utility scripts (weight conversion, dataset prep)
-├── requirements.txt            # Library dependencies
-├── LICENSE                     # Apache-2.0 (inherits from Google BERT)
-└── README.md                   # This file
+  model/                 # BERT + SBERT encoder implementation
+  heads/                 # Identity, Linear, MLP, Classification heads
+  utils/                 # data/cache utils, download scripts
+  training/              # train_nli.py, train_nli_test.py
+  evaluation/            # evaluate.py
+  train_nli_gpu.py        # cached NLI training for GPU servers
+  hf/                    # local HF assets (tokenizer + checkpoints)
+  data/                  # datasets (SNLI, MultiNLI, STS-*, SICKR)
 ```
 
-
-## Environment Setup
+## Environment
 
 ```bash
-git clone https://github.com/<you>/SBERT_JITTOR.git
-cd SBERT_JITTOR
-conda create -n sbert_jittor python=3.10
+conda create -n sbert_jittor python=3.12
 conda activate sbert_jittor
 pip install -r requirements.txt
-
-# Ensure a compiler is available (example for Ubuntu / WSL)
-sudo apt update && sudo apt install -y build-essential
 ```
 
-If Jittor cannot find `g++`, set `export cc_path=/usr/bin/g++` (or the correct path on your system). On Windows install the latest MSVC build tools.
+## Assets and data
 
-## Training SBERT
-
-### 1. Prepare datasets and checkpoints
+### 1) Datasets
 
 ```bash
 python utils/download_data.py
 ```
 
-```bash
-python utils/download_checkpoints.py
-```
+Datasets are stored under `./data/`:
+`SNLI`, `MultiNLI`, `STS-12..16`, `STS-B`, `SICKR`.
 
-### 3. Train SBERT (Jittor)
+## Data sources (Hugging Face)
 
-```bash
- # 전체 옵션
-  python train_nli.py bert-base-uncased \
-      --pooling mean \
-      --batch_size 16 \
-      --epochs 1 \
-      --eval_steps 1000 \
-      --save_steps 1000 \
-      --wandb \
-      --run_name "nli-v1" \
-      --use_cuda
+- **SNLI**: https://huggingface.co/datasets/stanfordnlp/snli
+- **MultiNLI**: https://huggingface.co/datasets/nyu-mll/multi_nli
+- **STS12-16**: https://huggingface.co/datasets/mteb/sts12-sts, https://huggingface.co/datasets/mteb/sts13-sts, https://huggingface.co/datasets/mteb/sts14-sts, https://huggingface.co/datasets/mteb/sts15-sts, https://huggingface.co/datasets/mteb/sts16-sts
+- **STS-B**: https://huggingface.co/datasets/mteb/stsbenchmark-sts
+- **SICK-R**: https://huggingface.co/datasets/mteb/sickr-sts
 
-# (local)
-python train_nli.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --wandb
-
-# on gpu server
-python train_nli_gpu.py bert-large-uncased --tokenizer_path /root/shared-nvme/hf/bert-large-uncased --encoder_checkpoint /root/shared-nvme/checkpoints/hf_bert_large/pytorch_model.bin --data_dir /root/shared-nvme/data --cache_dir /root/shared-nvme/data/tokenized --pooling mean --use_cuda --wandb  
-
-# symbolic
-python train_nli_gpu.py bert-large-uncased --tokenizer_path ./hf/bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --data_dir ./data --cache_dir ./data/tokenized --pooling mean --use_cuda --wandb    
-
-# 중간부터 시작
-python train_nli_gpu.py bert-large-uncased --tokenizer_path /root/shared-nvme/hf/bert-large-uncased --encoder_checkpoint /root/shared-nvme/checkpoints/hf_bert_large/pytorch_model.bin --data_dir /root/shared-nvme/data --cache_dir /root/shared-nvme/data/tokenized --pooling mean --use_cuda --output_dir /shared-public/output --save_steps 5000 --start_from_checkpoints /root/shared-nvme/output/training_nli_bert-large-uncased-2025-12-23_18-00-09/best_step2000.pkl
-```
+### 2) Tokenizer (local)
 
 ```bash
-python train_nli_copy.py bert-large-uncased --encoder_checkpoint ./checkpoints/hf_bert_large/pytorch_model.bin --pooling mean --max_steps 1 --skip_initial_eval
+python utils/download_tokenizer.py --repo_id bert-large-uncased
 ```
-The script uses Jittor’s AdamW optimizer and autograd, plus the vendored `BertModel`.
 
-huggingface sentence transformer의 훈련과정을 모방함.
+Default output:
+```
+./hf/tokenizer/<repo_id>/
+```
 
-### 4. Evaluate on STS benchmarks
+### 3) HF checkpoints (local)
 
 ```bash
-python examples/evaluate_sts.py \
-  --checkpoint checkpoints/sbert_jittor_base/best_model.pkl \
-  --eval_split sts-dev \
-  --batch_size 32
+python utils/download_checkpoints.py --model-name bert-large-uncased
 ```
 
-The evaluator dispatches per model type (PyTorch baseline, Jittor SBERT, or HuggingFace SentenceTransformer) but shares the same encode → cosine → Pearson/Spearman pipeline.
+Default output:
+```
+./hf/pretrained_bert_checkpoints/<model_name>/pytorch_model.bin
+```
 
-### 5. Compare against HuggingFace models
+## Training
 
-Use the playground summaries:
+The training scripts automatically load:
+- tokenizer from `./hf/tokenizer/<base_model>` if present
+- encoder checkpoint from `./hf/pretrained_bert_checkpoints/<base_model>/pytorch_model.bin` if present
+
+### Local training (cached tokenization)
 
 ```bash
-python playground/bert_summary.py          # HF BERT base/large reference
-python playground/model_summary.py         # SentenceTransformer configs
+python training/train_nli.py bert-large-uncased --pooling mean --use_cuda
 ```
 
-## Weight Handling
+### Test/run-limited training
 
-- **Conversion from HuggingFace**: 현재 map PyTorch weights into Jittor by downloading it from HuggingFace.
+```bash
+python training/train_nli_test.py bert-large-uncased --pooling mean --use_cuda
+```
 
-- **Baseline**: Optional PyTorch baselines can live in downstream repos; SBERT-Jittor focuses on the Jittor-native path.
+### GPU server training (cached + resume + checkpoints)
+
+```bash
+python train_nli_gpu.py bert-large-uncased \
+  --encoder_checkpoint ./hf/pretrained_bert_checkpoints/bert-large-uncased/pytorch_model.bin \
+  --data_dir ./data \
+  --cache_dir ./data/tokenized \
+  --pooling mean \
+  --use_cuda \
+  --output_dir ./output \
+  --save_steps 1000
+```
+
+Checkpoint behavior:
+- `best.pkl` keeps the best validation score.
+- `checkpoint_latest.pkl` keeps the most recent periodic checkpoint.
+
+Resume training:
+```bash
+python train_nli_gpu.py bert-large-uncased \
+  --start_from_checkpoints ./output/best.pkl \
+  --use_cuda
+```
+
+## Evaluation
+
+Evaluate a trained checkpoint on STS datasets:
+
+```bash
+python evaluation/evaluate.py \
+  --checkpoint_path ./output/best.pkl \
+  --base_model bert-large-uncased \
+  --datasets all
+```
+
+Supported datasets:
+`sts12`, `sts13`, `sts14`, `sts15`, `sts16`, `stsb`, `sick-r`, `all`.
 
 ## Licensing
 
-- The BERT implementation is derived from Google’s [BERT](https://github.com/google-research/bert) and the Jittor port [LetianLee/BERT-Jittor](https://github.com/LetianLee/BERT-Jittor), and remains under **Apache License 2.0**.
-- Any redistributed checkpoints must comply with the original pretraining data licenses.
-- When publishing to HuggingFace or other hubs, include attribution in the model card and reference this repository.
+- The BERT implementation is derived from Google BERT and BERT-Jittor
+  and remains under Apache 2.0.
+- Any redistributed checkpoints must comply with the original model licenses.
 
 ```
 SPDX-License-Identifier: Apache-2.0
@@ -132,8 +160,6 @@ Modifications Copyright 2025 Wooseok Han
 ```
 
 ## Citation
-
-If you use this project, please cite the original BERT paper and SBERT paper:
 
 ```
 @article{devlin2019bert,

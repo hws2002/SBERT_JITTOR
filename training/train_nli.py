@@ -29,6 +29,10 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from utils.data_loader import (
     collate_nli,
     collate_sts,
@@ -200,6 +204,14 @@ def setup_wandb(args):
         return None
 
 
+def resolve_tokenizer_source(args) -> str:
+    candidate = os.path.join(args.hf_tokenizer_dir, args.base_model)
+    if os.path.isdir(candidate):
+        logger.info(f"Using local tokenizer: {candidate}")
+        return candidate
+    return args.base_model
+
+
 def resolve_encoder_checkpoint(args) -> str | None:
     if args.encoder_checkpoint:
         return args.encoder_checkpoint
@@ -258,7 +270,8 @@ def train(args):
 
     # 1. Load tokenizer
     logger.info("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
+    tokenizer_source = resolve_tokenizer_source(args)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
 
     cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
 
@@ -513,6 +526,8 @@ def parse_args():
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
     parser.add_argument("--hf_checkpoint_dir", type=str, default="./hf/pretrained_bert_checkpoints",
                         help="Base directory containing pretrained HF checkpoints")
+    parser.add_argument("--hf_tokenizer_dir", type=str, default="./hf/tokenizer",
+                        help="Base directory containing local tokenizers")
     parser.add_argument("--num_labels", type=int, default=3,
                         help="Number of NLI classification labels")
 

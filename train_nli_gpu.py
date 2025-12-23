@@ -1,8 +1,11 @@
 """
-Train SBERT on NLI datasets with cached tokenization and DataLoader workers.
+Train SBERT on NLI datasets (SNLI + MultiNLI) with evaluation on STS benchmark
 
-This version avoids per-step tokenization by caching tokenized datasets
-to disk and supports num_workers for parallel data loading.
+The system trains BERT on the SNLI + MultiNLI (AllNLI) dataset
+with cross-entropy loss. At every N training steps, the model is evaluated on the
+STS benchmark dataset.
+
+Inspired by: https://github.com/UKPLab/sentence-transformers/blob/master/examples/training/nli/training_nli.py
 """
 
 import argparse
@@ -680,7 +683,7 @@ def parse_args():
                         help="Log metrics every N steps")
     parser.add_argument("--eval_steps", type=int, default=1000,
                         help="Evaluate on STS benchmark every N steps")
-    parser.add_argument("--save_steps", type=int, default=1000,
+    parser.add_argument("--save_steps", type=int, default=5000,
                         help="Save checkpoint every N steps (0 to disable)")
     parser.add_argument("--start_from_checkpoints", type=str, default=None,
                         help="Path to a saved checkpoint to resume training")
