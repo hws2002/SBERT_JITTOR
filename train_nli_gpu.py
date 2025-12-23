@@ -473,6 +473,12 @@ def train(args):
 
     logger.info("\nEvaluation before training:")
     eval_results_before = evaluate_sts(model=model.sbert, dataloader=sts_dataloader)
+    if wandb:
+        wandb.log({
+            "eval/pearson": eval_results_before["pearson"],
+            "eval/spearman": eval_results_before["spearman"],
+            "step": 0,
+        })
 
     logger.info("\nStarting training...")
     logger.info("=" * 70)

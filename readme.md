@@ -25,6 +25,12 @@ https://github.com/LetianLee/BERT-Jittor and follows the Apache 2.0 license.
   - Linear projection
   - MLP projection
   - Classification head for NLI training
+- **Objectives**:
+  - Regression (STS): cosine similarity between sentence embeddings u and v,
+    optimized with mean squared error.
+  - Triplet loss: for anchor a, positive p, negative n, minimize
+    `max(||s_a - s_p|| - ||s_a - s_n|| + margin, 0)` with Euclidean distance
+    and margin = 1.
 - **Training**: NLI (SNLI + MultiNLI) with periodic STS evaluation.
 - **Evaluation**: STS12-16, STS-B, SICK-R with Pearson/Spearman.
 
@@ -101,12 +107,6 @@ The training scripts automatically load:
 
 ```bash
 python training/train_nli.py bert-large-uncased --pooling mean --use_cuda
-```
-
-### Test/run-limited training
-
-```bash
-python training/train_nli_test.py bert-large-uncased --pooling mean --use_cuda
 ```
 
 ### GPU server training (cached + resume + checkpoints)
