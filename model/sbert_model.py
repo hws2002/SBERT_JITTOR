@@ -145,7 +145,8 @@ class SBERTJittor(nn.Module):
         self.config = config
 
         # 1. Encoder module
-        self.encoder = BertModel(config)
+        # Disable BertPooler since SBERT uses its own pooling module.
+        self.encoder = BertModel(config, add_pooling_layer=False)
 
         # 2. Pooling module
         self.pooling = Pooling(pooling_mode=pooling)
