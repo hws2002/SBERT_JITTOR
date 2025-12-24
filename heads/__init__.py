@@ -11,11 +11,9 @@ Available heads:
 from .identity import IdentityHead
 from .linear import LinearHead
 from .mlp import MLPHead
-from .classification import ClassificationHead
 
 __all__ = [
     'IdentityHead',
     'LinearHead',
     'MLPHead',
-    'ClassificationHead',
 ]

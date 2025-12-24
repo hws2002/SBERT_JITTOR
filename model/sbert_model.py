@@ -143,7 +143,7 @@ class SBERTJittor(nn.Module):
         self.config = config
 
         # 1. Encoder module
-        # Disable BertPooler since SBERT uses its own pooling module.
+        #  Disable BertPooler since SBERT uses its own pooling module.
         self.encoder = BertModel(config, add_pooling_layer=False)
 
         # 2. Pooling module
@@ -335,38 +335,6 @@ class SBERTJittor(nn.Module):
         if checkpoint['head_state'] is not None:
             self.head.load_state_dict(checkpoint['head_state'])
         print(f"Model loaded from {load_path}")
-
-
-def create_sbert_model(
-    encoder_name: str = 'bert-base-uncased',
-    pooling: str = 'mean',
-    head_type: str = 'none',
-    output_dim: Optional[int] = None,
-    checkpoint_path: Optional[str] = None,
-    **kwargs
-) -> nn.Module:
-    """
-    Factory function to create SBERT models.
-
-    Args:
-        encoder_name: Encoder model name
-        pooling: Pooling strategy
-        head_type: Projection head type
-        output_dim: Output dimension for projection
-        checkpoint_path: Path to pretrained weights
-        **kwargs: Additional arguments for head
-
-    Returns:
-        SBERTJittor model
-    """
-    return SBERTJittor(
-        encoder_name=encoder_name,
-        pooling=pooling,
-        head_type=head_type,
-        output_dim=output_dim,
-        checkpoint_path=checkpoint_path,
-        **kwargs
-    )
 
 
 if __name__ == "__main__":

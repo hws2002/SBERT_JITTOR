@@ -109,7 +109,7 @@ The training scripts automatically load:
 - **Optimizer**: Adam, lr `2e-5`, linear warmup `10%`
 - **Pooling**: MEAN (default)
 - **STS-B supervised**: train/dev/test = 5,749 / 1,500 / 1,379
-- **Regression**: cosine similarity + MSE on STS targets (0–5)
+- **Regression**: cosine similarity + MSE on STS targets (0-5)
 - **Two-stage**: NLI pretraining, then STS-B fine-tuning
 
 ### Local training (cached tokenization)
@@ -155,6 +155,35 @@ python evaluation/evaluate.py \
 
 Supported datasets:
 `sts12`, `sts13`, `sts14`, `sts15`, `sts16`, `stsb`, `sick-r`, `all`.
+
+## Typical usage (code)
+
+Encoding example :
+
+```python
+from model.sbert_model import SBERTJittor
+
+model = SBERTJittor("bert-base-uncased", pooling="mean", head_type="none")
+
+u = model.encode(input_ids_a, attention_mask_a, token_type_ids_a)
+v = model.encode(input_ids_b, attention_mask_b, token_type_ids_b)
+```
+
+Common training flows:
+
+```bash
+# 1) NLI fine-tuning (classification objective)
+python training/train_nli.py bert-base-uncased --pooling mean --use_cuda
+
+# 2) STS regression fine-tuning
+python training/train_sts.py bert-base-uncased --pooling mean --use_cuda
+```
+
+Evaluation on STS benchmarks:
+
+```bash
+python evaluation/evaluate.py --checkpoint_path ./output/best.pkl --base_model bert-base-uncased --datasets stsb
+```
 
 ## Licensing
 

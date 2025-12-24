@@ -617,6 +617,12 @@ def train(args):
         collate_fn=collate_sts
     )
 
+    best_path = Path(args.output_dir) / "best.pkl"
+    if best_path.is_file():
+        logger.info(f"Loading best checkpoint for final test: {best_path}")
+        best_state = jt.load(str(best_path))
+        model.load_state_dict(best_state["model_state"])
+
     test_results = evaluate_sts(model=model, dataloader=sts_test_dataloader)
 
     if wandb:
