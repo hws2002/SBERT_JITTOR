@@ -103,6 +103,15 @@ The training scripts automatically load:
 - tokenizer from `./hf/tokenizer/<base_model>` if present
 - encoder checkpoint from `./hf/pretrained_bert_checkpoints/<base_model>/pytorch_model.bin` if present
 
+### Training details (from SBERT paper)
+
+- **NLI fine-tuning**: 1 epoch on SNLI + MultiNLI
+- **Optimizer**: Adam, lr `2e-5`, linear warmup `10%`
+- **Pooling**: MEAN (default)
+- **STS-B supervised**: train/dev/test = 5,749 / 1,500 / 1,379
+- **Regression**: cosine similarity + MSE on STS targets (0–5)
+- **Two-stage**: NLI pretraining, then STS-B fine-tuning improves STS performance
+
 ### Local training (cached tokenization)
 
 ```bash

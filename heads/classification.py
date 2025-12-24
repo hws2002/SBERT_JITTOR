@@ -13,9 +13,9 @@ class ClassificationHead(nn.Module):
     Takes two sentence embeddings u and v, concatenates them with their
     element-wise difference |u - v|, and projects to classification logits.
 
-    Architecture: [u; v; |u - v|] -> Linear -> Tanh -> Linear -> logits
+    Architecture: [u; v; |u - v|] -> Linear -> logits
 
-    This is the standard SBERT architecture for NLI training.
+    This matches the SBERT paper's classification objective.
     """
 
     def __init__(self, hidden_size: int, num_labels: int = 3):
@@ -29,11 +29,7 @@ class ClassificationHead(nn.Module):
         # Input is concatenation of [u, v, |u-v|]
         input_size = hidden_size * 3
 
-        self.classifier = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.Tanh(),
-            nn.Linear(hidden_size, num_labels),
-        )
+        self.classifier = nn.Linear(input_size, num_labels)
 
         self.hidden_size = hidden_size
         self.num_labels = num_labels
