@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from model.sbert_model import SBERTWithClassification
+from model.sbert_model import SBERTJittor
 from utils.data_loader import collate_sts, prepare_sts_dataset
 
 logging.basicConfig(
@@ -192,10 +192,10 @@ def main():
 
     logger.info("Loading checkpoint...")
     checkpoint = jt.load(args.checkpoint_path)
-    model = SBERTWithClassification(
+    model = SBERTJittor(
         encoder_name=args.base_model,
         pooling=args.pooling,
-        num_labels=args.num_labels,
+        head_type="none",
         checkpoint_path=None,
     )
     model.load_state_dict(checkpoint["model_state"])
@@ -213,7 +213,7 @@ def main():
 
         logger.info(f"Evaluating {dataset_name} ({split})...")
         scores = evaluate_dataset(
-            model=model.sbert,
+            model=model,
             tokenizer=tokenizer,
             data_dir=args.data_dir,
             dataset_name=dataset_name,

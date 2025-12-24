@@ -4,7 +4,7 @@ SBERT (Sentence-BERT) Implementation in Jittor
 Modular architecture inspired by sentence-transformers:
 - Encoder: BertModel or other transformer models
 - Pooling: mean, cls, max pooling strategies
-- Head: optional projection heads (none, linear, mlp, classification)
+- Head: optional projection heads (none, linear, mlp)
 """
 
 from typing import Dict, Optional, Literal
@@ -19,13 +19,13 @@ except ImportError:
 
 # Import heads
 try:
-    from ..heads import IdentityHead, LinearHead, MLPHead, ClassificationHead
+    from ..heads import IdentityHead, LinearHead, MLPHead
 except ImportError:
     import sys
     from pathlib import Path
     # Add parent directory to path for standalone execution
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from heads import IdentityHead, LinearHead, MLPHead, ClassificationHead
+    from heads import IdentityHead, LinearHead, MLPHead
 
 from jittor_utils.load_pytorch import load_pytorch
 
@@ -339,101 +339,12 @@ class SBERTJittor(nn.Module):
         print(f"Model loaded from {load_path}")
 
 
-# ============================================================================
-# SBERT with Classification Head (for NLI training)
-# ============================================================================
-
-class SBERTWithClassification(nn.Module):
-    """
-    SBERT with classification head for NLI training.
-
-    Uses two sentence encodings and concatenates them with element-wise difference
-    for 3-way classification (entailment, neutral, contradiction).
-    """
-
-    def __init__(
-        self,
-        encoder_name: str = 'bert-base-uncased',
-        pooling: str = 'mean',
-        num_labels: int = 3,
-        config: Optional[BertConfig] = None,
-        checkpoint_path: Optional[str] = None
-    ):
-        super().__init__()
-
-        # SBERT encoder (no projection head for NLI training)
-        self.sbert = SBERTJittor(
-            encoder_name=encoder_name,
-            pooling=pooling,
-            head_type='none',
-            config=config,
-            checkpoint_path=checkpoint_path
-        )
-
-        # Classification head: [u, v, |u-v|] -> logits
-        self.classifier = ClassificationHead(
-            hidden_size=self.sbert.output_dim,
-            num_labels=num_labels
-        )
-
-        self.num_labels = num_labels
-
-    def encode(
-        self,
-        input_ids: jt.Var,
-        attention_mask: jt.Var,
-        token_type_ids: Optional[jt.Var] = None
-    ) -> jt.Var:
-        """Encode sentences (delegates to SBERT)"""
-        return self.sbert.encode(input_ids, attention_mask, token_type_ids)
-
-    def execute(self, batch: Dict[str, jt.Var]) -> jt.Var:
-        """
-        Forward pass for NLI classification.
-
-        Args:
-            batch: Dictionary containing:
-                - 'input_ids_a', 'attention_mask_a': First sentence
-                - 'input_ids_b', 'attention_mask_b': Second sentence
-                - 'token_type_ids_a', 'token_type_ids_b': (optional)
-
-        Returns:
-            logits: [batch_size, num_labels]
-        """
-        # Encode both sentences
-        emb_a = self.encode(
-            batch['input_ids_a'],
-            batch['attention_mask_a'],
-            batch.get('token_type_ids_a', None)
-        )
-        emb_b = self.encode(
-            batch['input_ids_b'],
-            batch['attention_mask_b'],
-            batch.get('token_type_ids_b', None)
-        )
-
-        # Use classification head
-        logits = self.classifier(emb_a, emb_b)
-
-        return logits
-
-    def load_checkpoint(self, checkpoint_path: str):
-        """Load encoder checkpoint (delegates to SBERT)"""
-        self.sbert.load_checkpoint(checkpoint_path)
-
-
-# ============================================================================
-# Helper function for creating models
-# ============================================================================
-
 def create_sbert_model(
     encoder_name: str = 'bert-base-uncased',
     pooling: str = 'mean',
     head_type: str = 'none',
     output_dim: Optional[int] = None,
     checkpoint_path: Optional[str] = None,
-    for_training: bool = False,
-    num_labels: int = 3,
     **kwargs
 ) -> nn.Module:
     """
@@ -445,29 +356,19 @@ def create_sbert_model(
         head_type: Projection head type
         output_dim: Output dimension for projection
         checkpoint_path: Path to pretrained weights
-        for_training: If True, return SBERTWithClassification
-        num_labels: Number of labels for classification
         **kwargs: Additional arguments for head
 
     Returns:
-        SBERT model (either SBERTJittor or SBERTWithClassification)
+        SBERTJittor model
     """
-    if for_training:
-        return SBERTWithClassification(
-            encoder_name=encoder_name,
-            pooling=pooling,
-            num_labels=num_labels,
-            checkpoint_path=checkpoint_path
-        )
-    else:
-        return SBERTJittor(
-            encoder_name=encoder_name,
-            pooling=pooling,
-            head_type=head_type,
-            output_dim=output_dim,
-            checkpoint_path=checkpoint_path,
-            **kwargs
-        )
+    return SBERTJittor(
+        encoder_name=encoder_name,
+        pooling=pooling,
+        head_type=head_type,
+        output_dim=output_dim,
+        checkpoint_path=checkpoint_path,
+        **kwargs
+    )
 
 
 if __name__ == "__main__":
@@ -497,18 +398,6 @@ if __name__ == "__main__":
     print("\n4. SBERT with MLP projection head")
     model4 = SBERTJittor('bert-base-uncased', pooling='mean', head_type='mlp', output_dim=128, num_layers=2)
     print(f"Output dim: {model4.output_dim}")
-
-    # 5. SBERT for training (with classification head)
-    print("\n5. SBERT with classification head (for NLI training)")
-    model5 = SBERTWithClassification('bert-base-uncased', pooling='mean', num_labels=3)
-    print(f"Encoder output dim: {model5.sbert.output_dim}")
-    print(f"Num labels: {model5.num_labels}")
-
-    # 6. RoBERTa for training
-    print("\n6. RoBERTa with classification head (for NLI training)")
-    model6 = SBERTWithClassification('roberta-base', pooling='mean', num_labels=3)
-    print(f"Encoder output dim: {model6.sbert.output_dim}")
-    print(f"Num labels: {model6.num_labels}")
 
     print("\n" + "=" * 70)
     print("All tests completed!")

@@ -46,3 +46,40 @@ class TripletLoss(nn.Module):
         dist_an = self._pairwise_dist(anchor, negative)
         loss = jt.maximum(dist_ap - dist_an + self.margin, 0.0)
         return jt.mean(loss)
+
+
+class SoftmaxLoss(nn.Module):
+    """
+    SBERT-style softmax loss with a classifier inside the loss module.
+
+    Uses [u; v; |u - v|] and cross-entropy loss for NLI training.
+    """
+
+    def __init__(self, model, num_labels: int, concatenation_sent_difference: bool = True):
+        super().__init__()
+        self.model = model
+        self.num_labels = num_labels
+
+        embedding_dim = model.output_dim
+        num_vectors = 3 if concatenation_sent_difference else 2
+
+        self.classifier = nn.Linear(embedding_dim * num_vectors, num_labels)
+        self.loss_fct = nn.CrossEntropyLoss()
+
+    def execute(self, batch, labels):
+        rep_a = self.model.encode(
+            input_ids=batch["input_ids_a"],
+            attention_mask=batch["attention_mask_a"],
+            token_type_ids=batch.get("token_type_ids_a", None),
+        )
+        rep_b = self.model.encode(
+            input_ids=batch["input_ids_b"],
+            attention_mask=batch["attention_mask_b"],
+            token_type_ids=batch.get("token_type_ids_b", None),
+        )
+
+        vectors = [rep_a, rep_b, jt.abs(rep_a - rep_b)]
+        features = jt.concat(vectors, dim=1)
+        logits = self.classifier(features)
+        loss = self.loss_fct(logits, labels)
+        return loss, logits

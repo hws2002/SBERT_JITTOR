@@ -24,7 +24,8 @@ from transformers import AutoTokenizer
 from datasets import load_from_disk, concatenate_datasets
 from torch.utils.data import DataLoader
 
-from model.sbert_model import SBERTWithClassification
+from model.sbert_model import SBERTJittor
+from losses import SoftmaxLoss
 
 # Set the log level to INFO
 logging.basicConfig(
@@ -347,7 +348,7 @@ def setup_wandb(args):
         return None
 
 
-def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint"):
+def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name="checkpoint"):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -362,6 +363,7 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
         "iteration": iteration,
         "epoch": epoch,
         "model_state": model.state_dict(),
+        "loss_state": train_loss.state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "base_model": args.base_model,
         "pooling": args.pooling,
@@ -373,10 +375,12 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
     return checkpoint_path
 
 
-def load_training_checkpoint(model, optimizer, checkpoint_path: str) -> tuple[int, int]:
+def load_training_checkpoint(model, train_loss, optimizer, checkpoint_path: str) -> tuple[int, int]:
     logger.info(f"Loading training checkpoint: {checkpoint_path}")
     checkpoint = jt.load(checkpoint_path)
     model.load_state_dict(checkpoint["model_state"])
+    if "loss_state" in checkpoint:
+        train_loss.load_state_dict(checkpoint["loss_state"])
     if optimizer is not None and "optimizer_state" in checkpoint:
         try:
             optimizer.load_state_dict(checkpoint["optimizer_state"])
@@ -440,15 +444,16 @@ def train(args):
     logger.info(f"Total training steps: {total_steps}")
 
     logger.info("Initializing SBERT model...")
-    model = SBERTWithClassification(
+    model = SBERTJittor(
         encoder_name=args.base_model,
         pooling=args.pooling,
-        num_labels=args.num_labels,
+        head_type="none",
         checkpoint_path=args.encoder_checkpoint,
     )
-    logger.info(f"Model embedding dimension: {model.sbert.output_dim}")
+    logger.info(f"Model embedding dimension: {model.output_dim}")
 
-    optimizer = nn.Adam(model.parameters(), lr=args.lr)
+    train_loss = SoftmaxLoss(model=model, num_labels=args.num_labels)
+    optimizer = nn.Adam(list(model.parameters()) + list(train_loss.parameters()), lr=args.lr)
     warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
     logger.info(f"Warmup steps: {warmup_steps}")
 
@@ -472,7 +477,7 @@ def train(args):
     )
 
     logger.info("\nEvaluation before training:")
-    eval_results_before = evaluate_sts(model=model.sbert, dataloader=sts_dataloader)
+    eval_results_before = evaluate_sts(model=model, dataloader=sts_dataloader)
     if wandb:
         wandb.log({
             "eval/pearson": eval_results_before["pearson"],
@@ -488,6 +493,7 @@ def train(args):
     if args.start_from_checkpoints:
         global_step, start_epoch = load_training_checkpoint(
             model,
+            train_loss,
             optimizer,
             args.start_from_checkpoints,
         )
@@ -497,6 +503,7 @@ def train(args):
     best_spearman = eval_results_before["spearman"]
 
     model.train()
+    train_loss.train()
 
     for epoch in range(start_epoch, args.epochs):
         epoch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
@@ -505,8 +512,7 @@ def train(args):
             jt_batch = _to_jittor_batch(batch, for_sts=False)
             labels = jt_batch["labels"]
 
-            logits = model(jt_batch)
-            loss = nn.cross_entropy_loss(logits, labels)
+            loss, logits = train_loss(jt_batch, labels)
 
             optimizer.step(loss)
 
@@ -554,7 +560,7 @@ def train(args):
                     })
 
             if global_step % args.eval_steps == 0:
-                eval_results = evaluate_sts(model=model.sbert, dataloader=sts_dataloader)
+                eval_results = evaluate_sts(model=model, dataloader=sts_dataloader)
 
                 if wandb:
                     wandb.log({
@@ -565,10 +571,10 @@ def train(args):
 
                 if eval_results["spearman"] > best_spearman:
                     best_spearman = eval_results["spearman"]
-                    save_checkpoint(model, optimizer, global_step, epoch + 1, args, name="best")
+                    save_checkpoint(model, train_loss, optimizer, global_step, epoch + 1, args, name="best")
 
             if args.save_steps > 0 and global_step % args.save_steps == 0:
-                save_checkpoint(model, optimizer, global_step, epoch + 1, args, name="checkpoint")
+                save_checkpoint(model, train_loss, optimizer, global_step, epoch + 1, args, name="checkpoint")
 
         avg_loss = total_loss / total_samples
         accuracy = total_correct / total_samples * 100
@@ -611,7 +617,7 @@ def train(args):
         collate_fn=collate_sts
     )
 
-    test_results = evaluate_sts(model=model.sbert, dataloader=sts_test_dataloader)
+    test_results = evaluate_sts(model=model, dataloader=sts_test_dataloader)
 
     if wandb:
         wandb.log({
@@ -628,6 +634,7 @@ def train(args):
 
     checkpoint = {
         "model_state": model.state_dict(),
+        "loss_state": train_loss.state_dict(),
         "base_model": args.base_model,
         "pooling": args.pooling,
         "num_labels": args.num_labels,

@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from heads import RegressionLoss
+from losses import RegressionLoss
 from model.sbert_model import SBERTJittor
 from utils.data_loader import collate_sts, prepare_sts_dataset
 

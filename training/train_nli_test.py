@@ -39,7 +39,8 @@ from utils.data_loader import (
     prepare_nli_dataset,
     prepare_sts_dataset,
 )
-from model.sbert_model import SBERTWithClassification
+from model.sbert_model import SBERTJittor
+from losses import SoftmaxLoss
 
 # Set the log level to INFO
 logging.basicConfig(
@@ -222,7 +223,7 @@ def resolve_encoder_checkpoint(args) -> str | None:
     return None
 
 
-def save_checkpoint(model, optimizer, iteration, epoch, args, name='checkpoint'):
+def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name='checkpoint'):
     """Save model checkpoint"""
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -233,6 +234,7 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name='checkpoint')
         'iteration': iteration,
         'epoch': epoch,
         'model_state': model.state_dict(),
+        'loss_state': train_loss.state_dict(),
         'optimizer_state': optimizer.state_dict(),
         'base_model': args.base_model,
         'pooling': args.pooling,
@@ -308,16 +310,17 @@ def train(args):
 
     # 3. Create model with SoftmaxLoss (Cross-entropy)
     logger.info("Initializing SBERT model...")
-    model = SBERTWithClassification(
+    model = SBERTJittor(
         encoder_name=args.base_model,
         pooling=args.pooling,
-        num_labels=args.num_labels,
+        head_type="none",
         checkpoint_path=resolve_encoder_checkpoint(args),
     )
-    logger.info(f"Model embedding dimension: {model.sbert.output_dim}")
+    logger.info(f"Model embedding dimension: {model.output_dim}")
 
     # 4. Setup optimizer
-    optimizer = nn.Adam(model.parameters(), lr=args.lr)
+    train_loss = SoftmaxLoss(model=model, num_labels=args.num_labels)
+    optimizer = nn.Adam(list(model.parameters()) + list(train_loss.parameters()), lr=args.lr)
     warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
     logger.info(f"Warmup steps: {warmup_steps}")
 
@@ -328,7 +331,7 @@ def train(args):
     else:
         logger.info("\nEvaluation before training:")
         eval_results_before = evaluate_sts(
-            model=model.sbert,
+            model=model,
             tokenizer=tokenizer,
             data_dir=args.data_dir,
             dataset_name='STS-B',
@@ -351,6 +354,7 @@ def train(args):
     total_samples = 0
 
     model.train()
+    train_loss.train()
 
     for epoch in range(args.epochs):
         epoch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
@@ -361,8 +365,7 @@ def train(args):
             labels = jt_batch["labels"]
 
             # Forward pass
-            logits = model(jt_batch)
-            loss = nn.cross_entropy_loss(logits, labels)
+            loss, logits = train_loss(jt_batch, labels)
 
             # Backward pass
             optimizer.step(loss)
@@ -418,7 +421,7 @@ def train(args):
             # Evaluate on STS benchmark
             if global_step % args.eval_steps == 0:
                 eval_results = evaluate_sts(
-                    model=model.sbert,
+                    model=model,
                     tokenizer=tokenizer,
                     data_dir=args.data_dir,
                     dataset_name='STS-B',
@@ -440,11 +443,11 @@ def train(args):
                 # Save best model
                 if eval_results['spearman'] > best_spearman:
                     best_spearman = eval_results['spearman']
-                    save_checkpoint(model, optimizer, global_step, epoch+1, args, name='best')
+                    save_checkpoint(model, train_loss, optimizer, global_step, epoch+1, args, name='best')
 
             # Save checkpoint periodically
             if args.save_steps > 0 and global_step % args.save_steps == 0:
-                save_checkpoint(model, optimizer, global_step, epoch+1, args, name='checkpoint')
+                save_checkpoint(model, train_loss, optimizer, global_step, epoch+1, args, name='checkpoint')
 
             # Check if max_steps reached
             if args.max_steps > 0 and global_step >= args.max_steps:
@@ -482,7 +485,7 @@ def train(args):
     logger.info("="*70)
 
     test_results = evaluate_sts(
-        model=model.sbert,
+        model=model,
         tokenizer=tokenizer,
         data_dir=args.data_dir,
         dataset_name='STS-B',
@@ -510,6 +513,7 @@ def train(args):
 
     checkpoint = {
         "model_state": model.state_dict(),
+        "loss_state": train_loss.state_dict(),
         "base_model": args.base_model,
         "pooling": args.pooling,
         "num_labels": args.num_labels,
