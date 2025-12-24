@@ -17,13 +17,11 @@ try:
 except ImportError:
     from bert_model import BertConfig, BertModel
 
-# Import heads
 try:
     from ..heads import IdentityHead, LinearHead, MLPHead
 except ImportError:
     import sys
     from pathlib import Path
-    # Add parent directory to path for standalone execution
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from heads import IdentityHead, LinearHead, MLPHead
 
