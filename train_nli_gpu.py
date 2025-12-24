@@ -348,6 +348,11 @@ def setup_wandb(args):
         return None
 
 
+def _filtered_loss_state(train_loss):
+    loss_state = train_loss.state_dict()
+    return {k: v for k, v in loss_state.items() if not k.startswith("model.")}
+
+
 def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name="checkpoint"):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -363,7 +368,7 @@ def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name="
         "iteration": iteration,
         "epoch": epoch,
         "model_state": model.state_dict(),
-        "loss_state": train_loss.state_dict(),
+        "loss_state": _filtered_loss_state(train_loss),
         "optimizer_state": optimizer.state_dict(),
         "base_model": args.base_model,
         "pooling": args.pooling,
@@ -380,7 +385,10 @@ def load_training_checkpoint(model, train_loss, optimizer, checkpoint_path: str)
     checkpoint = jt.load(checkpoint_path)
     model.load_state_dict(checkpoint["model_state"])
     if "loss_state" in checkpoint:
-        train_loss.load_state_dict(checkpoint["loss_state"])
+        try:
+            train_loss.load_state_dict(checkpoint["loss_state"])
+        except Exception as exc:
+            logger.warning(f"Partial loss_state load (expected): {exc}")
     if optimizer is not None and "optimizer_state" in checkpoint:
         try:
             optimizer.load_state_dict(checkpoint["optimizer_state"])
@@ -453,7 +461,7 @@ def train(args):
     logger.info(f"Model embedding dimension: {model.output_dim}")
 
     train_loss = SoftmaxLoss(model=model, num_labels=args.num_labels)
-    optimizer = nn.Adam(list(model.parameters()) + list(train_loss.parameters()), lr=args.lr)
+    optimizer = nn.Adam(train_loss.parameters(), lr=args.lr)
     warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
     logger.info(f"Warmup steps: {warmup_steps}")
 
@@ -640,7 +648,7 @@ def train(args):
 
     checkpoint = {
         "model_state": model.state_dict(),
-        "loss_state": train_loss.state_dict(),
+        "loss_state": _filtered_loss_state(train_loss),
         "base_model": args.base_model,
         "pooling": args.pooling,
         "num_labels": args.num_labels,
