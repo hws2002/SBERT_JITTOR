@@ -110,7 +110,7 @@ The training scripts automatically load:
 - **Pooling**: MEAN (default)
 - **STS-B supervised**: train/dev/test = 5,749 / 1,500 / 1,379
 - **Regression**: cosine similarity + MSE on STS targets (0–5)
-- **Two-stage**: NLI pretraining, then STS-B fine-tuning improves STS performance
+- **Two-stage**: NLI pretraining, then STS-B fine-tuning
 
 ### Local training (cached tokenization)
 
