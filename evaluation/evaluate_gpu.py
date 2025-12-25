@@ -43,6 +43,7 @@ DATASET_MAP = {
     "sick-r": "SICKR",
 }
 
+HF_DIR = "./hf"
 def _safe_model_id(model_name: str) -> str:
     return model_name.replace("/", "_")
 
@@ -197,23 +198,16 @@ def parse_args():
                         help="Path to a saved Jittor checkpoint (.pkl)")
     parser.add_argument("--base_model", type=str, default="bert-base-uncased",
                         help="Base encoder model name")
-    parser.add_argument("--model_type", type=str, default="sbert_jittor",
-                        help="Model type label for reporting")
-    parser.add_argument("--model_name", type=str, default=None,
-                        help="Short model name for reporting")
     parser.add_argument("--framework", type=str, default="jittor",
                         choices=["jittor", "torch"],
                         help="Evaluation framework")
-    parser.add_argument("--tokenizer_path", type=str, default=None,
-                        help="Local tokenizer directory (overrides base_model)")
-    parser.add_argument("--hf_tokenizer_dir", type=str, default="./hf/tokenizer",
-                        help="Base directory containing local tokenizers")
+    parser.add_argument("--encoder_checkpoint_path", type=str, default="./hf",
+                        help="Base directory containing local models/tokenizers")
     parser.add_argument("--pooling", type=str, default="mean",
                         choices=["mean", "cls", "max"],
                         help="Pooling strategy")
     parser.add_argument("--num_labels", type=int, default=3,
                         help="Number of NLI classification labels")
-
     parser.add_argument("--data_dir", type=str, default="./data",
                         help="Directory containing datasets")
     parser.add_argument("--cache_dir", type=str, default="./data/tokenized",
@@ -272,7 +266,7 @@ def main():
         try:
             import wandb as _wandb
 
-            run_name = args.run_name if args.run_name else f"eval-{args.model_name or args.base_model}"
+            run_name = args.run_name if args.run_name else f"eval-{args.base_model}"
             _wandb.init(
                 project=args.wandb_project,
                 name=run_name,
@@ -292,15 +286,15 @@ def main():
     tokenizer = None
     model = None
     if args.framework == "jittor":
-        tokenizer_source = args.tokenizer_path
-        if tokenizer_source is None:
-            candidate = os.path.join(args.hf_tokenizer_dir, args.base_model)
+        tokenizer_source = args.base_model
+        if not os.path.isdir(tokenizer_source):
+            candidate = os.path.join(args.encoder_checkpoint_path, args.base_model)
             if os.path.isdir(candidate):
                 tokenizer_source = candidate
-        if tokenizer_source is None:
+        if not os.path.isdir(tokenizer_source):
             raise ValueError(
-                "Tokenizer not found locally. Provide --tokenizer_path "
-                "or put it under --hf_tokenizer_dir."
+                "Tokenizer not found locally. Provide a local base_model directory "
+                "or place it under --encoder_checkpoint_path."
             )
         logger.info(f"Loading tokenizer from: {tokenizer_source}")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
@@ -381,8 +375,7 @@ def main():
 
     payload = {
         "model_info": {
-            "type": args.model_type,
-            "model_name": args.model_name or args.base_model,
+            "model_name": args.base_model,
             "max_length": args.max_length,
         },
         "evaluation": {
@@ -413,7 +406,7 @@ def main():
     if output_path is None:
         output_dir = Path("./result")
         output_dir.mkdir(parents=True, exist_ok=True)
-        safe_model = (args.model_name or args.base_model).replace("/", "_")
+        safe_model = args.base_model.replace("/", "_")
         output_path = output_dir / f"eval_{safe_model}_{payload['timestamp']}.json"
     else:
         output_path = Path(output_path)

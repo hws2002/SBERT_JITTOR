@@ -69,7 +69,8 @@ def _to_jittor_batch(batch: Dict[str, Iterable], for_sts: bool = False) -> Dict[
 
 
 def _safe_model_id(model_name: str) -> str:
-    return model_name.replace("/", "_")
+    base_name = Path(model_name).name
+    return base_name.replace("/", "_")
 
 
 def _cache_path(cache_dir: str, dataset_name: str, split: str, model_name: str, max_length: int) -> str:

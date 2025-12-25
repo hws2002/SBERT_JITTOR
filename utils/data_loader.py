@@ -11,7 +11,8 @@ from datasets import concatenate_datasets, load_from_disk
 
 
 def _safe_model_id(model_name: str) -> str:
-    return model_name.replace("/", "_")
+    base_name = Path(model_name).name
+    return base_name.replace("/", "_")
 
 
 def _cache_path(cache_dir: str, dataset_name: str, split: str, model_name: str, max_length: int) -> str:
