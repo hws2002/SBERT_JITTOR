@@ -226,6 +226,27 @@ def _resolve_pooling(args, checkpoint):
     return args.pooling
 
 
+def _safe_load_state(target, state: Dict[str, jt.Var], label: str):
+    target_state = target.state_dict()
+    filtered = {}
+    skipped = 0
+
+    for key, value in state.items():
+        if key not in target_state:
+            skipped += 1
+            continue
+        if tuple(value.shape) != tuple(target_state[key].shape):
+            skipped += 1
+            continue
+        filtered[key] = value
+
+    target.load_state_dict(filtered)
+    logger.info(
+        f"Loaded {len(filtered)}/{len(state)} params into {label} "
+        f"(skipped {skipped})."
+    )
+
+
 def _load_eval_model(args, checkpoint):
     if not isinstance(checkpoint, dict):
         raise ValueError("Unsupported checkpoint format (expected dict).")
@@ -240,7 +261,7 @@ def _load_eval_model(args, checkpoint):
                 pooling=pooling,
                 num_labels=args.num_labels,
             )
-            wrapper.load_state_dict(state)
+            _safe_load_state(wrapper, state, "SBERTWithClassification")
             return wrapper.sbert
 
         model = SBERTJittor(
@@ -249,7 +270,7 @@ def _load_eval_model(args, checkpoint):
             head_type="none",
             checkpoint_path=None,
         )
-        model.load_state_dict(state)
+        _safe_load_state(model, state, "SBERTJittor")
         return model
 
     if "encoder" in checkpoint:
@@ -261,9 +282,9 @@ def _load_eval_model(args, checkpoint):
             output_dim=None,
             checkpoint_path=None,
         )
-        model.encoder.load_state_dict(checkpoint["encoder"])
+        _safe_load_state(model.encoder, checkpoint["encoder"], "SBERTJittor.encoder")
         if head_type != "none" and checkpoint.get("head_state") is not None:
-            model.head.load_state_dict(checkpoint["head_state"])
+            _safe_load_state(model.head, checkpoint["head_state"], "SBERTJittor.head")
         return model
 
     raise ValueError("Checkpoint missing model_state/encoder keys.")
