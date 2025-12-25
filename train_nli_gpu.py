@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 STS_DATASETS = ["STS-12", "STS-13", "STS-14", "STS-15", "STS-16", "STS-B", "SICKR"]
 HF_DIR = "./hf"
+MODEL_DIR_MAP = {
+    "bert-large-uncased": "hf_bert_large",
+    "bert-base-uncased": "hf_bert_base",
+}
 
 
 def _jt_array(data, dtype: str):
@@ -518,7 +522,8 @@ def train(args):
 
     tokenizer_source = args.base_model
     if not os.path.isdir(tokenizer_source):
-        candidate = os.path.join(HF_DIR, args.base_model)
+        mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
+        candidate = os.path.join(HF_DIR, mapped)
         if os.path.isdir(candidate):
             tokenizer_source = candidate
     if not os.path.isdir(tokenizer_source):
@@ -805,7 +810,8 @@ def train_torch(args):
 
     model_source = args.base_model
     if not os.path.isdir(model_source):
-        candidate = os.path.join(HF_DIR, args.base_model)
+        mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
+        candidate = os.path.join(HF_DIR, mapped)
         if os.path.isdir(candidate):
             model_source = candidate
     if not os.path.isdir(model_source):

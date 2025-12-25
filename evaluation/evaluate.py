@@ -230,7 +230,12 @@ def main():
 
     tokenizer_source = args.tokenizer_path
     if tokenizer_source is None:
-        candidate = os.path.join(args.encoder_checkpoint_path, args.base_model)
+        model_dir_map = {
+            "bert-large-uncased": "hf_bert_large",
+            "bert-base-uncased": "hf_bert_base",
+        }
+        mapped = model_dir_map.get(args.base_model, args.base_model)
+        candidate = os.path.join(args.encoder_checkpoint_path, mapped)
         if os.path.isdir(candidate):
             tokenizer_source = candidate
     if tokenizer_source is None:

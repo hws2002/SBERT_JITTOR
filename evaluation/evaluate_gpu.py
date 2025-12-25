@@ -44,6 +44,10 @@ DATASET_MAP = {
 }
 
 HF_DIR = "./hf"
+MODEL_DIR_MAP = {
+    "bert-large-uncased": "hf_bert_large",
+    "bert-base-uncased": "hf_bert_base",
+}
 def _safe_model_id(model_name: str) -> str:
     return model_name.replace("/", "_")
 
@@ -288,7 +292,8 @@ def main():
     if args.framework == "jittor":
         tokenizer_source = args.base_model
         if not os.path.isdir(tokenizer_source):
-            candidate = os.path.join(args.encoder_checkpoint_path, args.base_model)
+            mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
+            candidate = os.path.join(args.encoder_checkpoint_path, mapped)
             if os.path.isdir(candidate):
                 tokenizer_source = candidate
         if not os.path.isdir(tokenizer_source):
