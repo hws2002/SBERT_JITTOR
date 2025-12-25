@@ -39,6 +39,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 STS_DATASETS = ["STS-12", "STS-13", "STS-14", "STS-15", "STS-16", "STS-B", "SICKR"]
+HF_DIR = "./hf"
 
 
 def _jt_array(data, dtype: str):
@@ -514,9 +515,15 @@ def train(args):
     setup_device(args.use_cuda)
     wandb = setup_wandb(args)
 
-    tokenizer_source = args.tokenizer_path or args.base_model
+    tokenizer_source = args.base_model
+    if not os.path.isdir(tokenizer_source):
+        candidate = os.path.join(HF_DIR, args.base_model)
+        if os.path.isdir(candidate):
+            tokenizer_source = candidate
+    if not os.path.isdir(tokenizer_source):
+        raise ValueError("Expected local model directory for tokenizer (base_model).")
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
 
     cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
 
@@ -795,14 +802,19 @@ def train_torch(args):
     from torch.utils.data import DataLoader as TorchDataLoader
     from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
-    if args.tokenizer_path is None:
-        raise ValueError("Torch framework requires --tokenizer_path (local tokenizer only).")
+    model_source = args.base_model
+    if not os.path.isdir(model_source):
+        candidate = os.path.join(HF_DIR, args.base_model)
+        if os.path.isdir(candidate):
+            model_source = candidate
+    if not os.path.isdir(model_source):
+        raise ValueError("Torch framework requires a local model directory for base_model.")
 
     device = torch.device("cuda" if args.use_cuda and torch.cuda.is_available() else "cpu")
     logger.info(f"Using torch device: {device}")
 
-    logger.info(f"Loading tokenizer from: {args.tokenizer_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, use_fast=True, local_files_only=True)
+    logger.info(f"Loading tokenizer from: {model_source}")
+    tokenizer = AutoTokenizer.from_pretrained(model_source, use_fast=True, local_files_only=True)
 
     cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
 
@@ -831,9 +843,9 @@ def train_torch(args):
         raise RuntimeError("No training data found. Check data_dir/datasets arguments.")
     logger.info(f"Total training steps: {total_steps}")
 
-    logger.info("Initializing Hugging Face classification model...")
+    logger.info(f"Initializing Hugging Face classification model from: {model_source}")
     model = AutoModelForSequenceClassification.from_pretrained(
-        args.base_model,
+        model_source,
         num_labels=args.num_labels,
         local_files_only=True,
     )
@@ -936,17 +948,15 @@ def parse_args():
     )
 
     parser.add_argument("base_model", nargs="?", default="bert-base-uncased",
-                        help="Base encoder model (bert-base-uncased, bert-large-uncased, roberta-base, roberta-large)")
+                        help="Base encoder model name (resolved under ./hf if not a path)")
     parser.add_argument("--pooling", default="mean",
                         choices=["mean", "cls", "max"],
                         help="Pooling strategy")
     parser.add_argument("--framework", default="jittor",
                         choices=["jittor", "torch"],
                         help="Training framework")
-    parser.add_argument("--encoder_checkpoint", type=str, default=None,
+    parser.add_argument("--encoder_checkpoint_path", type=str, default='./hf',
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
-    parser.add_argument("--tokenizer_path", type=str, default=None,
-                        help="Local path to a tokenizer directory (overrides base_model for tokenization)")
     parser.add_argument("--num_labels", type=int, default=3,
                         help="Number of NLI classification labels")
 
@@ -1003,7 +1013,7 @@ def parse_args():
     if args.output_dir is None:
         model_name = args.base_model.replace("/", "-")
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        args.output_dir = f"output/training_nli_{model_name}-{timestamp}"
+        args.output_dir = f"checkpoints/training_nli_{model_name}-{timestamp}"
 
     return args
 
