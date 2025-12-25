@@ -2,6 +2,7 @@
 Loss functions for SBERT-style objectives.
 """
 
+import math
 import jittor as jt
 from jittor import nn
 
@@ -64,7 +65,19 @@ class SoftmaxLoss(nn.Module):
         num_vectors = 3 if concatenation_sent_difference else 2
 
         self.classifier = nn.Linear(embedding_dim * num_vectors, num_labels)
+        self._init_classifier(self.classifier)
         self.loss_fct = nn.CrossEntropyLoss()
+
+    @staticmethod
+    def _init_classifier(layer: nn.Linear) -> None:
+        # Match PyTorch nn.Linear default init (kaiming_uniform with a=sqrt(5)).
+        fan_in = layer.weight.shape[1]
+        bound = 1.0 / math.sqrt(fan_in)
+        weight = jt.uniform(layer.weight.shape, low=-bound, high=bound)
+        layer.weight.assign(weight)
+        if layer.bias is not None:
+            bias = jt.uniform(layer.bias.shape, low=-bound, high=bound)
+            layer.bias.assign(bias)
 
     def execute(self, batch, labels):
         rep_a = self.model.encode(
