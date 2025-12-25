@@ -190,6 +190,12 @@ def parse_args():
                         help="Split to evaluate (STS-B supports validation/test)")
     parser.add_argument("--output_json", type=str, default=None,
                         help="Path to write JSON results (default: ./result/eval_<timestamp>.json)")
+    parser.add_argument("--wandb", action="store_true",
+                        help="Log evaluation results to Weights & Biases")
+    parser.add_argument("--wandb_project", type=str, default="sbert_evaluation",
+                        help="W&B project name")
+    parser.add_argument("--run_name", type=str, default=None,
+                        help="W&B run name (default: auto-generated)")
 
     return parser.parse_args()
 
@@ -203,6 +209,28 @@ def main():
     else:
         jt.flags.use_cuda = 0
         logger.info("Using CPU")
+
+    wandb = None
+    if args.wandb:
+        try:
+            import wandb as _wandb
+
+            run_name = args.run_name if args.run_name else f"eval-{args.model_name or args.base_model}"
+            _wandb.init(
+                project=args.wandb_project,
+                name=run_name,
+                config={
+                    "model": args.base_model,
+                    "batch_size": args.batch_size,
+                    "max_length": args.max_length,
+                    "split": args.split,
+                    "datasets": args.datasets,
+                },
+            )
+            wandb = _wandb
+            logger.info(f"W&B initialized: {args.wandb_project}/{run_name}")
+        except ImportError:
+            logger.warning("wandb not installed. Skipping W&B logging.")
 
     tokenizer_source = args.tokenizer_path
     if tokenizer_source is None:
@@ -253,6 +281,14 @@ def main():
         logger.info(
             f"{dataset_name} - Pearson: {scores['pearson']:.2f}, Spearman: {scores['spearman']:.2f}"
         )
+        if wandb:
+            wandb.log({
+                "dataset": dataset_name,
+                "pearson": scores["pearson"],
+                "spearman": scores["spearman"],
+                "n_samples": scores["n_samples"],
+                "eval_time": scores["eval_time"],
+            })
 
     avg_pearson = sum(v["pearson"] for v in results.values()) / max(len(results), 1)
     avg_spearman = sum(v["spearman"] for v in results.values()) / max(len(results), 1)
@@ -302,6 +338,13 @@ def main():
         json.dump(payload, handle, ensure_ascii=True, indent=2)
 
     logger.info(f"Evaluation complete. Results saved to {output_path}")
+    if wandb:
+        wandb.log({
+            "avg/pearson": avg_pearson,
+            "avg/spearman": avg_spearman,
+            "avg/n_datasets": len(results),
+        })
+        wandb.finish()
 
 
 if __name__ == "__main__":
