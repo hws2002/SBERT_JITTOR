@@ -9,9 +9,11 @@ Inspired by: https://github.com/UKPLab/sentence-transformers/blob/master/example
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional
@@ -35,6 +37,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+
+STS_DATASETS = ["STS-12", "STS-13", "STS-14", "STS-15", "STS-16", "STS-B", "SICKR"]
 
 
 def _jt_array(data, dtype: str):
@@ -306,6 +310,96 @@ def evaluate_sts(model, dataloader):
     model.train()
     return results
 
+
+def evaluate_sts_all(
+    model,
+    tokenizer,
+    data_dir: str,
+    cache_dir: str,
+    max_length: int,
+    overwrite_cache: bool,
+    tokenize_batch_size: int,
+    eval_batch_size: int,
+    num_workers: int,
+):
+    all_results = {}
+    for dataset_name in STS_DATASETS:
+        split = "test"
+        sts_dataset = prepare_sts_dataset(
+            data_dir=data_dir,
+            dataset_name=dataset_name,
+            split=split,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            cache_dir=cache_dir,
+            overwrite_cache=overwrite_cache,
+            tokenize_batch_size=tokenize_batch_size,
+        )
+        sts_dataloader = DataLoader(
+            sts_dataset,
+            batch_size=eval_batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=collate_sts,
+        )
+        logger.info(f"Evaluating {dataset_name} ({split})...")
+        scores = evaluate_sts(model=model, dataloader=sts_dataloader)
+        all_results[dataset_name] = {
+            "split": split,
+            "pearson": scores["pearson"],
+            "spearman": scores["spearman"],
+            "n_samples": len(sts_dataset),
+        }
+    return all_results
+
+
+def save_eval_results(
+    results: Dict[str, Dict[str, float]],
+    args,
+    output_dir: Path,
+):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    safe_model = args.base_model.replace("/", "_")
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    output_path = output_dir / f"eval_{safe_model}_{timestamp}.json"
+
+    avg_pearson = sum(v["pearson"] for v in results.values()) / max(len(results), 1)
+    avg_spearman = sum(v["spearman"] for v in results.values()) / max(len(results), 1)
+
+    payload = {
+        "model_info": {
+            "type": "sbert_jittor",
+            "model_name": safe_model,
+            "max_length": args.max_length,
+        },
+        "evaluation": {
+            "split": "test",
+            "batch_size": args.eval_batch_size,
+            "device": "cuda" if jt.flags.use_cuda else "cpu",
+        },
+        "results": [
+            {
+                "dataset": name.lower().replace("sts-", "sts").replace("-b", "b"),
+                "split": info["split"],
+                "pearson": info["pearson"],
+                "spearman": info["spearman"],
+                "n_samples": info["n_samples"],
+            }
+            for name, info in results.items()
+        ],
+        "average": {
+            "pearson": avg_pearson,
+            "spearman": avg_spearman,
+            "n_datasets": len(results),
+        },
+        "timestamp": timestamp,
+    }
+
+    with output_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=True, indent=2)
+
+    logger.info(f"Saved evaluation results to {output_path}")
+    return payload, output_path
 
 def setup_device(use_cuda):
     if use_cuda and jt.has_cuda:
@@ -656,6 +750,41 @@ def train(args):
     logger.info(f"Final Spearman score (test): {test_results['spearman']:.2f}")
     logger.info(f"Final model saved: {final_path}")
     logger.info("=" * 70)
+
+    logger.info("\n" + "=" * 70)
+    logger.info("Final Evaluation on STS/SICKR Test Sets (Best Checkpoint)")
+    logger.info("=" * 70)
+
+    best_path = Path(args.output_dir) / "best.pkl"
+    if best_path.is_file():
+        logger.info(f"Loading best checkpoint for evaluation: {best_path}")
+        best_state = jt.load(str(best_path))
+        model.load_state_dict(best_state["model_state"])
+
+    all_results = evaluate_sts_all(
+        model=model,
+        tokenizer=tokenizer,
+        data_dir=args.data_dir,
+        cache_dir=cache_dir,
+        max_length=args.max_length,
+        overwrite_cache=args.overwrite_cache,
+        tokenize_batch_size=args.tokenize_batch_size,
+        eval_batch_size=args.eval_batch_size,
+        num_workers=args.num_workers,
+    )
+    payload, output_path = save_eval_results(all_results, args, Path(args.output_dir) / "result")
+
+    if wandb:
+        dataset_metrics = {}
+        for name, info in all_results.items():
+            key = name.lower().replace("sts-", "sts").replace("-b", "b")
+            dataset_metrics[f"{key}/pearson"] = info["pearson"]
+            dataset_metrics[f"{key}/spearman"] = info["spearman"]
+            dataset_metrics[f"{key}/n_samples"] = info["n_samples"]
+        dataset_metrics["avg/pearson"] = payload["average"]["pearson"]
+        dataset_metrics["avg/spearman"] = payload["average"]["spearman"]
+        dataset_metrics["avg/n_datasets"] = payload["average"]["n_datasets"]
+        wandb.log(dataset_metrics)
 
     if wandb:
         wandb.finish()
