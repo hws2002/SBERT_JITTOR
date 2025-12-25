@@ -42,6 +42,15 @@ DATASET_MAP = {
     "sick-r": "SICKR",
 }
 
+def _safe_model_id(model_name: str) -> str:
+    return model_name.replace("/", "_")
+
+
+def _cache_path(cache_dir: str, dataset_name: str, split: str, model_name: str, max_length: int) -> str:
+    model_id = _safe_model_id(model_name)
+    name = f"{dataset_name}_{split}_{model_id}_len{max_length}"
+    return os.path.join(cache_dir, name)
+
 
 def _jt_array(data, dtype: str):
     return jt.array(np.asarray(data, dtype=dtype))
@@ -76,11 +85,18 @@ def evaluate_dataset(
     tokenize_batch_size: int,
     batch_size: int,
     num_workers: int,
+    require_cache: bool,
 ):
     import numpy as np
     from scipy.stats import pearsonr, spearmanr
 
     start_time = time.time()
+    cache_path = _cache_path(cache_dir, dataset_name, split, tokenizer.name_or_path, max_length)
+    if require_cache and not os.path.isdir(cache_path):
+        raise FileNotFoundError(
+            f"Missing cached dataset at {cache_path}. "
+            "Generate caches first or disable --require_cache."
+        )
     sts_dataset = prepare_sts_dataset(
         data_dir=data_dir,
         dataset_name=dataset_name,
@@ -150,8 +166,6 @@ def parse_args():
                         help="Model type label for reporting")
     parser.add_argument("--model_name", type=str, default=None,
                         help="Short model name for reporting")
-    parser.add_argument("--model_name", type=str, default=None,
-                        help="Short model name for reporting")
     parser.add_argument("--tokenizer_path", type=str, default=None,
                         help="Local tokenizer directory (overrides base_model)")
     parser.add_argument("--hf_tokenizer_dir", type=str, default="./hf/tokenizer",
@@ -178,6 +192,8 @@ def parse_args():
                         help="DataLoader worker processes")
     parser.add_argument("--use_cuda", action="store_true",
                         help="Use CUDA if available")
+    parser.add_argument("--require_cache", action="store_true",
+                        help="Require pre-tokenized cache (no tokenization during eval)")
 
     # Evaluation dataset selection
     parser.add_argument(
@@ -240,9 +256,12 @@ def main():
         if os.path.isdir(candidate):
             tokenizer_source = candidate
     if tokenizer_source is None:
-        tokenizer_source = args.base_model
+        raise ValueError(
+            "Tokenizer not found locally. Provide --tokenizer_path "
+            "or put it under --hf_tokenizer_dir."
+        )
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
 
     logger.info("Loading checkpoint...")
     checkpoint = jt.load(args.checkpoint_path)
@@ -278,19 +297,20 @@ def main():
             tokenize_batch_size=args.tokenize_batch_size,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
+            require_cache=args.require_cache,
         )
         results[dataset_name] = scores
         logger.info(
             f"{dataset_name} - Pearson: {scores['pearson']:.2f}, Spearman: {scores['spearman']:.2f}"
         )
-        if wandb:
-            wandb.log({
-                "dataset": dataset_name,
-                "pearson": scores["pearson"],
-                "spearman": scores["spearman"],
-                "n_samples": scores["n_samples"],
-                "eval_time": scores["eval_time"],
-            })
+    if wandb:
+        dataset_metrics = {}
+        for name, scores in results.items():
+            key = name.lower().replace("sts-", "sts").replace("-b", "b")
+            dataset_metrics[f"{key}/pearson"] = scores["pearson"]
+            dataset_metrics[f"{key}/spearman"] = scores["spearman"]
+            dataset_metrics[f"{key}/n_samples"] = scores["n_samples"]
+            dataset_metrics[f"{key}/eval_time"] = scores["eval_time"]
 
     avg_pearson = sum(v["pearson"] for v in results.values()) / max(len(results), 1)
     avg_spearman = sum(v["spearman"] for v in results.values()) / max(len(results), 1)
@@ -299,7 +319,6 @@ def main():
         "model_info": {
             "type": args.model_type,
             "model_name": args.model_name or args.base_model,
-            "full_model_name": args.base_model,
             "max_length": args.max_length,
         },
         "evaluation": {
@@ -341,11 +360,10 @@ def main():
 
     logger.info(f"Evaluation complete. Results saved to {output_path}")
     if wandb:
-        wandb.log({
-            "avg/pearson": avg_pearson,
-            "avg/spearman": avg_spearman,
-            "avg/n_datasets": len(results),
-        })
+        dataset_metrics["avg/pearson"] = avg_pearson
+        dataset_metrics["avg/spearman"] = avg_spearman
+        dataset_metrics["avg/n_datasets"] = len(results)
+        wandb.log(dataset_metrics)
         wandb.finish()
 
 
