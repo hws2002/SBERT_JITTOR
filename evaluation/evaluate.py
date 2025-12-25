@@ -281,14 +281,14 @@ def main():
         logger.info(
             f"{dataset_name} - Pearson: {scores['pearson']:.2f}, Spearman: {scores['spearman']:.2f}"
         )
-        if wandb:
-            wandb.log({
-                "dataset": dataset_name,
-                "pearson": scores["pearson"],
-                "spearman": scores["spearman"],
-                "n_samples": scores["n_samples"],
-                "eval_time": scores["eval_time"],
-            })
+    if wandb:
+        dataset_metrics = {}
+        for name, scores in results.items():
+            key = name.lower().replace("sts-", "sts").replace("-b", "b")
+            dataset_metrics[f"{key}/pearson"] = scores["pearson"]
+            dataset_metrics[f"{key}/spearman"] = scores["spearman"]
+            dataset_metrics[f"{key}/n_samples"] = scores["n_samples"]
+            dataset_metrics[f"{key}/eval_time"] = scores["eval_time"]
 
     avg_pearson = sum(v["pearson"] for v in results.values()) / max(len(results), 1)
     avg_spearman = sum(v["spearman"] for v in results.values()) / max(len(results), 1)
@@ -339,11 +339,10 @@ def main():
 
     logger.info(f"Evaluation complete. Results saved to {output_path}")
     if wandb:
-        wandb.log({
-            "avg/pearson": avg_pearson,
-            "avg/spearman": avg_spearman,
-            "avg/n_datasets": len(results),
-        })
+        dataset_metrics["avg/pearson"] = avg_pearson
+        dataset_metrics["avg/spearman"] = avg_spearman
+        dataset_metrics["avg/n_datasets"] = len(results)
+        wandb.log(dataset_metrics)
         wandb.finish()
 
 
