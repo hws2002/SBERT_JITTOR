@@ -5,7 +5,6 @@ Evaluate a trained SBERT checkpoint on STS-style datasets.
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -150,10 +149,6 @@ def parse_args():
                         help="Model type label for reporting")
     parser.add_argument("--model_name", type=str, default=None,
                         help="Short model name for reporting")
-    parser.add_argument("--tokenizer_path", type=str, default=None,
-                        help="Local tokenizer directory (overrides base_model)")
-    parser.add_argument("--hf_tokenizer_dir", type=str, default="./hf/tokenizer",
-                        help="Base directory containing local tokenizers")
     parser.add_argument("--pooling", type=str, default="mean",
                         choices=["mean", "cls", "max"],
                         help="Pooling strategy")
@@ -204,15 +199,8 @@ def main():
         jt.flags.use_cuda = 0
         logger.info("Using CPU")
 
-    tokenizer_source = args.tokenizer_path
-    if tokenizer_source is None:
-        candidate = os.path.join(args.hf_tokenizer_dir, args.base_model)
-        if os.path.isdir(candidate):
-            tokenizer_source = candidate
-    if tokenizer_source is None:
-        tokenizer_source = args.base_model
-    logger.info(f"Loading tokenizer from: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
+    logger.info("Loading tokenizer (online)...")
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
 
     logger.info("Loading checkpoint...")
     checkpoint = jt.load(args.checkpoint_path)

@@ -643,18 +643,12 @@ def train(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    final_path = output_dir / "final" / f"sbert_{args.base_model.replace('/', '_')}_{args.pooling}.pkl"
-    final_path.parent.mkdir(exist_ok=True)
+    final_dir = output_dir / "final"
+    final_dir.mkdir(exist_ok=True)
+    final_path = final_dir / f"sbert_{args.base_model.replace('/', '_')}_{args.pooling}.pkl"
 
-    checkpoint = {
-        "model_state": model.state_dict(),
-        "loss_state": _filtered_loss_state(train_loss),
-        "base_model": args.base_model,
-        "pooling": args.pooling,
-        "num_labels": args.num_labels,
-        "test_results": test_results,
-    }
-    jt.save(checkpoint, str(final_path))
+    # Save SBERTJittor-only weights (inference-ready).
+    model.save(str(final_path))
 
     logger.info("\n" + "=" * 70)
     logger.info("Training completed!")
