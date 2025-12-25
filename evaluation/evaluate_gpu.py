@@ -15,6 +15,7 @@ import numpy as np
 import jittor as jt
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
+from datasets import load_from_disk
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -153,6 +154,40 @@ def evaluate_dataset(
     }
 
 
+def evaluate_dataset_torch(
+    model,
+    data_dir: str,
+    dataset_name: str,
+    split: str,
+    batch_size: int,
+):
+    import numpy as np
+    from scipy.stats import pearsonr, spearmanr
+
+    start_time = time.time()
+    raw_ds = load_from_disk(os.path.join(data_dir, dataset_name))[split]
+    sentences1 = raw_ds["sentence1"]
+    sentences2 = raw_ds["sentence2"]
+    scores = np.asarray(raw_ds["score"], dtype=np.float32)
+
+    emb_a = model.encode(sentences1, batch_size=batch_size, show_progress_bar=False)
+    emb_b = model.encode(sentences2, batch_size=batch_size, show_progress_bar=False)
+
+    denom = np.linalg.norm(emb_a, axis=1) * np.linalg.norm(emb_b, axis=1) + 1e-9
+    sim = np.sum(emb_a * emb_b, axis=1) / denom
+
+    pearson_corr, _ = pearsonr(sim, scores)
+    spearman_corr, _ = spearmanr(sim, scores)
+
+    elapsed = time.time() - start_time
+    return {
+        "pearson": pearson_corr * 100,
+        "spearman": spearman_corr * 100,
+        "n_samples": len(raw_ds),
+        "eval_time": elapsed,
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Evaluate a trained SBERT checkpoint on STS datasets",
@@ -166,6 +201,9 @@ def parse_args():
                         help="Model type label for reporting")
     parser.add_argument("--model_name", type=str, default=None,
                         help="Short model name for reporting")
+    parser.add_argument("--framework", type=str, default="jittor",
+                        choices=["jittor", "torch"],
+                        help="Evaluation framework")
     parser.add_argument("--tokenizer_path", type=str, default=None,
                         help="Local tokenizer directory (overrides base_model)")
     parser.add_argument("--hf_tokenizer_dir", type=str, default="./hf/tokenizer",
@@ -221,12 +259,13 @@ def parse_args():
 def main():
     args = parse_args()
 
-    if args.use_cuda and jt.has_cuda:
-        jt.flags.use_cuda = 1
-        logger.info("Using CUDA")
-    else:
-        jt.flags.use_cuda = 0
-        logger.info("Using CPU")
+    if args.framework == "jittor":
+        if args.use_cuda and jt.has_cuda:
+            jt.flags.use_cuda = 1
+            logger.info("Using CUDA")
+        else:
+            jt.flags.use_cuda = 0
+            logger.info("Using CPU")
 
     wandb = None
     if args.wandb:
@@ -250,28 +289,44 @@ def main():
         except ImportError:
             logger.warning("wandb not installed. Skipping W&B logging.")
 
-    tokenizer_source = args.tokenizer_path
-    if tokenizer_source is None:
-        candidate = os.path.join(args.hf_tokenizer_dir, args.base_model)
-        if os.path.isdir(candidate):
-            tokenizer_source = candidate
-    if tokenizer_source is None:
-        raise ValueError(
-            "Tokenizer not found locally. Provide --tokenizer_path "
-            "or put it under --hf_tokenizer_dir."
-        )
-    logger.info(f"Loading tokenizer from: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
+    tokenizer = None
+    model = None
+    if args.framework == "jittor":
+        tokenizer_source = args.tokenizer_path
+        if tokenizer_source is None:
+            candidate = os.path.join(args.hf_tokenizer_dir, args.base_model)
+            if os.path.isdir(candidate):
+                tokenizer_source = candidate
+        if tokenizer_source is None:
+            raise ValueError(
+                "Tokenizer not found locally. Provide --tokenizer_path "
+                "or put it under --hf_tokenizer_dir."
+            )
+        logger.info(f"Loading tokenizer from: {tokenizer_source}")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
 
-    logger.info("Loading checkpoint...")
-    checkpoint = jt.load(args.checkpoint_path)
-    model = SBERTJittor(
-        encoder_name=args.base_model,
-        pooling=args.pooling,
-        head_type="none",
-        checkpoint_path=None,
-    )
-    model.load_state_dict(checkpoint["model_state"])
+        logger.info("Loading checkpoint...")
+        checkpoint = jt.load(args.checkpoint_path)
+        model = SBERTJittor(
+            encoder_name=args.base_model,
+            pooling=args.pooling,
+            head_type="none",
+            checkpoint_path=None,
+        )
+        model.load_state_dict(checkpoint["model_state"])
+    else:
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        from sentence_transformers import SentenceTransformer
+
+        model_path = args.checkpoint_path
+        logger.info(f"Loading sentence-transformers model from: {model_path}")
+        model = SentenceTransformer(
+            model_path,
+            device="cuda" if args.use_cuda else "cpu",
+            model_kwargs={"local_files_only": True},
+            tokenizer_kwargs={"local_files_only": True},
+        )
 
     dataset_keys = args.datasets
     if "all" in dataset_keys:
@@ -285,20 +340,29 @@ def main():
             split = "test"
 
         logger.info(f"Evaluating {dataset_name} ({split})...")
-        scores = evaluate_dataset(
-            model=model,
-            tokenizer=tokenizer,
-            data_dir=args.data_dir,
-            dataset_name=dataset_name,
-            split=split,
-            max_length=args.max_length,
-            cache_dir=args.cache_dir,
-            overwrite_cache=args.overwrite_cache,
-            tokenize_batch_size=args.tokenize_batch_size,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            require_cache=args.require_cache,
-        )
+        if args.framework == "jittor":
+            scores = evaluate_dataset(
+                model=model,
+                tokenizer=tokenizer,
+                data_dir=args.data_dir,
+                dataset_name=dataset_name,
+                split=split,
+                max_length=args.max_length,
+                cache_dir=args.cache_dir,
+                overwrite_cache=args.overwrite_cache,
+                tokenize_batch_size=args.tokenize_batch_size,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                require_cache=args.require_cache,
+            )
+        else:
+            scores = evaluate_dataset_torch(
+                model=model,
+                data_dir=args.data_dir,
+                dataset_name=dataset_name,
+                split=split,
+                batch_size=args.batch_size,
+            )
         results[dataset_name] = scores
         logger.info(
             f"{dataset_name} - Pearson: {scores['pearson']:.2f}, Spearman: {scores['spearman']:.2f}"

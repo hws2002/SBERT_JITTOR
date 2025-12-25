@@ -790,6 +790,145 @@ def train(args):
         wandb.finish()
 
 
+def train_torch(args):
+    import torch
+    from torch.utils.data import DataLoader as TorchDataLoader
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
+
+    if args.tokenizer_path is None:
+        raise ValueError("Torch framework requires --tokenizer_path (local tokenizer only).")
+
+    device = torch.device("cuda" if args.use_cuda and torch.cuda.is_available() else "cpu")
+    logger.info(f"Using torch device: {device}")
+
+    logger.info(f"Loading tokenizer from: {args.tokenizer_path}")
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, use_fast=True, local_files_only=True)
+
+    cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
+
+    logger.info("Preparing NLI training data (cached tokenization)...")
+    train_dataset = prepare_nli_dataset(
+        data_dir=args.data_dir,
+        datasets=args.datasets,
+        split="train",
+        tokenizer=tokenizer,
+        max_length=args.max_length,
+        cache_dir=cache_dir,
+        overwrite_cache=args.overwrite_cache,
+        tokenize_batch_size=args.tokenize_batch_size,
+    )
+
+    train_dataloader = TorchDataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        collate_fn=collate_nli,
+    )
+
+    total_steps = args.epochs * len(train_dataloader)
+    if total_steps == 0:
+        raise RuntimeError("No training data found. Check data_dir/datasets arguments.")
+    logger.info(f"Total training steps: {total_steps}")
+
+    logger.info("Initializing Hugging Face classification model...")
+    model = AutoModelForSequenceClassification.from_pretrained(
+        args.base_model,
+        num_labels=args.num_labels,
+        local_files_only=True,
+    )
+    if args.encoder_checkpoint:
+        logger.info(f"Loading encoder checkpoint: {args.encoder_checkpoint}")
+        state = torch.load(args.encoder_checkpoint, map_location="cpu")
+        missing, unexpected = model.base_model.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            logger.info(f"Encoder load missing={len(missing)} unexpected={len(unexpected)}")
+
+    model.to(device)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+    )
+
+    logger.info("\nStarting torch training...")
+    logger.info("=" * 70)
+
+    global_step = 0
+    model.train()
+    for epoch in range(args.epochs):
+        epoch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
+        total_loss = 0.0
+        total_correct = 0
+        total_samples = 0
+
+        for step, batch in enumerate(epoch_iterator, 1):
+            input_ids = torch.tensor(batch["input_ids_a"], device=device)
+            attention_mask = torch.tensor(batch["attention_mask_a"], device=device)
+            token_type_ids = batch.get("token_type_ids_a")
+            if token_type_ids is not None:
+                token_type_ids = torch.tensor(token_type_ids, device=device)
+            labels = torch.tensor(batch["labels"], device=device)
+
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                labels=labels,
+            )
+            loss = outputs.loss
+            logits = outputs.logits
+
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+
+            global_step += 1
+
+            with torch.no_grad():
+                preds = torch.argmax(logits, dim=1)
+                correct = (preds == labels).sum().item()
+                batch_size = labels.size(0)
+
+            total_loss += loss.item() * batch_size
+            total_correct += correct
+            total_samples += batch_size
+
+            avg_loss = total_loss / total_samples
+            accuracy = total_correct / total_samples * 100
+            epoch_iterator.set_postfix({
+                "loss": f"{loss.item():.4f}",
+                "avg_loss": f"{avg_loss:.4f}",
+                "acc": f"{accuracy:.2f}%",
+                "lr": f"{scheduler.get_last_lr()[0]:.2e}",
+            })
+
+            if global_step % args.log_steps == 0:
+                logger.info(
+                    f"Step {global_step}/{total_steps} | "
+                    f"Loss: {loss.item():.4f} | "
+                    f"Avg Loss: {avg_loss:.4f} | "
+                    f"Acc: {accuracy:.2f}% | "
+                    f"LR: {scheduler.get_last_lr()[0]:.2e}"
+                )
+
+    logger.info("\nSaving torch model...")
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    final_dir = output_dir / "final"
+    final_dir.mkdir(exist_ok=True)
+
+    encoder_dir = final_dir / "hf_encoder"
+    encoder_dir.mkdir(exist_ok=True)
+
+    model.base_model.save_pretrained(encoder_dir)
+    tokenizer.save_pretrained(encoder_dir)
+
+    logger.info(f"Saved HF encoder to {encoder_dir}")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Train SBERT on NLI datasets with cached tokenization and DataLoader workers",
@@ -801,6 +940,9 @@ def parse_args():
     parser.add_argument("--pooling", default="mean",
                         choices=["mean", "cls", "max"],
                         help="Pooling strategy")
+    parser.add_argument("--framework", default="jittor",
+                        choices=["jittor", "torch"],
+                        help="Training framework")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
     parser.add_argument("--tokenizer_path", type=str, default=None,
@@ -868,4 +1010,7 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    train(args)
+    if args.framework == "torch":
+        train_torch(args)
+    else:
+        train(args)
