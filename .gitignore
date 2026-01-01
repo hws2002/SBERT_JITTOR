@@ -1,10 +1,10 @@
-data
 checkpoints
 hf
-
+data
 important_checkpoints/
 
-data/
+training_data/
+
 checkpoints/
 wandb/
 
