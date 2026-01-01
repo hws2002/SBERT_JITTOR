@@ -104,7 +104,7 @@ def setup_wandb(args):
         return None
 
 
-def evaluate_sts(model, dataloader):
+def evaluate_sts(model, dataloader, normalize_scores: bool = False, score_scale: float = 1.0):
     from scipy.stats import pearsonr, spearmanr
 
     model.eval()
@@ -131,7 +131,10 @@ def evaluate_sts(model, dataloader):
             sim = np.sum(emb_a_np * emb_b_np, axis=1) / denom
 
             all_predictions.extend(sim.tolist())
-            all_scores.extend(np.asarray(batch["scores"]).tolist())
+            scores_np = np.asarray(batch["scores"])
+            if normalize_scores and score_scale != 0:
+                scores_np = scores_np / score_scale
+            all_scores.extend(scores_np.tolist())
 
     pearson_corr, _ = pearsonr(all_predictions, all_scores)
     spearman_corr, _ = spearmanr(all_predictions, all_scores)
@@ -148,10 +151,8 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
 
     if name == "best":
         checkpoint_path = output_dir / "best.pkl"
-    elif name == "checkpoint":
-        checkpoint_path = output_dir / "checkpoint_latest.pkl"
     else:
-        checkpoint_path = output_dir / f"{name}_step{iteration}.pkl"
+        checkpoint_path = output_dir / f"{name}.pkl"
 
     checkpoint = {
         "iteration": iteration,
@@ -314,7 +315,12 @@ def train(args):
         )
 
     logger.info("Evaluation before training:")
-    eval_results_before = evaluate_sts(model=model, dataloader=eval_dataloader)
+    eval_results_before = evaluate_sts(
+        model=model,
+        dataloader=eval_dataloader,
+        normalize_scores=args.normalize_scores,
+        score_scale=args.score_scale,
+    )
     logger.info(
         f"Initial Eval - Pearson: {eval_results_before['pearson']:.2f}, "
         f"Spearman: {eval_results_before['spearman']:.2f}"
@@ -383,7 +389,12 @@ def train(args):
                     )
 
             if global_step % args.eval_steps == 0:
-                eval_results = evaluate_sts(model=model, dataloader=eval_dataloader)
+                eval_results = evaluate_sts(
+                    model=model,
+                    dataloader=eval_dataloader,
+                    normalize_scores=args.normalize_scores,
+                    score_scale=args.score_scale,
+                )
                 logger.info(
                     f"Eval - Pearson: {eval_results['pearson']:.2f}, "
                     f"Spearman: {eval_results['spearman']:.2f}"
@@ -399,9 +410,6 @@ def train(args):
                 if eval_results["spearman"] > best_spearman:
                     best_spearman = eval_results["spearman"]
                     save_checkpoint(model, optimizer, global_step, epoch + 1, args, name="best")
-
-            if args.save_steps > 0 and global_step % args.save_steps == 0:
-                save_checkpoint(model, optimizer, global_step, epoch + 1, args, name="checkpoint")
 
         avg_loss = total_loss / max(total_samples, 1)
         logger.info(f"\nEpoch {epoch + 1}/{args.epochs} Summary:")
@@ -447,7 +455,12 @@ def train(args):
         best_state = jt.load(str(best_path))
         model.load_state_dict(best_state["model_state"])
 
-    test_results = evaluate_sts(model=model, dataloader=test_dataloader)
+    test_results = evaluate_sts(
+        model=model,
+        dataloader=test_dataloader,
+        normalize_scores=args.normalize_scores,
+        score_scale=args.score_scale,
+    )
     logger.info(
         f"STS-B Test - Pearson: {test_results['pearson']:.2f}, "
         f"Spearman: {test_results['spearman']:.2f}"
@@ -468,8 +481,32 @@ def train(args):
     final_dir = output_dir / "final"
     final_dir.mkdir(exist_ok=True)
     final_path = final_dir / f"sbert_{args.base_model.replace('/', '_')}_{args.pooling}.pkl"
-    model.save(str(final_path))
-    logger.info(f"Final model saved: {final_path}")
+
+    stats_path = final_dir / "stats.json"
+    previous_spearman = None
+    if stats_path.exists():
+        try:
+            with stats_path.open("r", encoding="utf-8") as handle:
+                previous_stats = json.load(handle)
+                previous_spearman = previous_stats.get("spearman")
+        except Exception as exc:
+            logger.warning(f"Failed to read existing final stats: {exc}")
+
+    should_save_final = previous_spearman is None or test_results["spearman"] > previous_spearman
+    if should_save_final:
+        model.save(str(final_path))
+        new_stats = {
+            "pearson": test_results["pearson"],
+            "spearman": test_results["spearman"],
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        with stats_path.open("w", encoding="utf-8") as handle:
+            json.dump(new_stats, handle, ensure_ascii=False, indent=2)
+        logger.info(f"Final model saved: {final_path}")
+    else:
+        logger.info(
+            "Final model not saved because existing final checkpoint has equal or better Spearman score."
+        )
 
     if wandb:
         wandb.finish()
@@ -521,9 +558,9 @@ def parse_args():
                         help="Learning rate")
     parser.add_argument("--max_length", type=int, default=128,
                         help="Maximum sequence length")
-    parser.add_argument("--log_steps", type=int, default=10,
+    parser.add_argument("--log_steps", type=int, default=20,
                         help="Log metrics every N steps")
-    parser.add_argument("--eval_steps", type=int, default=90,
+    parser.add_argument("--eval_steps", type=int, default=180,
                         help="Evaluate on STS benchmark every N steps")
     parser.add_argument("--save_steps", type=int, default=1000,
                         help="Save checkpoint every N steps (0 to disable)")
