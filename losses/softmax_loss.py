@@ -30,10 +30,10 @@ class SoftmaxLoss(nn.Module):
         # Match PyTorch nn.Linear default init (kaiming_uniform with a=sqrt(5)).
         fan_in = layer.weight.shape[1]
         bound = 1.0 / math.sqrt(fan_in)
-        weight = jt.uniform(layer.weight.shape, low=-bound, high=bound)
+        weight = jt.rand(layer.weight.shape) * (2 * bound) - bound
         layer.weight.assign(weight)
         if layer.bias is not None:
-            bias = jt.uniform(layer.bias.shape, low=-bound, high=bound)
+            bias = jt.rand(layer.bias.shape) * (2 * bound) - bound
             layer.bias.assign(bias)
 
     def execute(self, batch, labels):
