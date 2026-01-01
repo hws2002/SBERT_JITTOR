@@ -960,7 +960,7 @@ def parse_args():
     parser.add_argument("--framework", default="jittor",
                         choices=["jittor", "torch"],
                         help="Training framework")
-    parser.add_argument("--encoder_checkpoint_path", type=str, default='./hf',
+    parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
     parser.add_argument("--num_labels", type=int, default=3,
                         help="Number of NLI classification labels")
