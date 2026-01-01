@@ -237,6 +237,12 @@ def train(args):
         head_type="none",
         checkpoint_path=args.encoder_checkpoint,
     )
+    if args.jittor_checkpoint:
+        payload = jt.load(args.jittor_checkpoint)
+        if isinstance(payload, dict) and "model_state" in payload:
+            model.load_state_dict(payload["model_state"])
+        else:
+            model.load_state_dict(payload)
     classifier = nn.Linear(model.output_dim, args.num_labels)
     optimizer = nn.Adam(list(model.parameters()) + list(classifier.parameters()), lr=args.lr)
     loss_fct = nn.CrossEntropyLoss()
@@ -287,6 +293,8 @@ def parse_args():
                         help="Pooling strategy")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
+    parser.add_argument("--jittor_checkpoint", type=str, default=None,
+                        help="Optional Jittor checkpoint (.pkl) with model_state")
 
     parser.add_argument("--data_dir", default="./data",
                         help="Directory containing datasets")
