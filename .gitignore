@@ -19,3 +19,5 @@ output/
 hf/
 debug/
 result/
+
+test.py
