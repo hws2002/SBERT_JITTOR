@@ -190,6 +190,28 @@ def train(args):
     logger.info("=" * 70)
 
     setup_device(args.use_cuda)
+    wandb = None
+    if args.wandb:
+        try:
+            import wandb as _wandb
+
+            run_name = args.run_name if args.run_name else f"mr-{args.base_model}-{args.pooling}"
+            _wandb.init(
+                project=args.wandb_project,
+                name=run_name,
+                config={
+                    "model": args.base_model,
+                    "pooling": args.pooling,
+                    "batch_size": args.batch_size,
+                    "learning_rate": args.lr,
+                    "max_length": args.max_length,
+                    "epochs": args.epochs,
+                },
+            )
+            wandb = _wandb
+            logger.info(f"W&B initialized: {args.wandb_project}/{run_name}")
+        except ImportError:
+            logger.warning("wandb not installed. Skipping W&B logging.")
 
     tokenizer_source = _resolve_tokenizer_source(args.base_model)
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
@@ -273,12 +295,24 @@ def train(args):
             f"Epoch {epoch + 1}/{args.epochs} - Dev Loss: {dev_scores['loss']:.4f} "
             f"Acc: {dev_scores['accuracy']:.2f}"
         )
+        if wandb:
+            wandb.log(
+                {
+                    "epoch": epoch + 1,
+                    "train/loss": avg_loss,
+                    "dev/loss": dev_scores["loss"],
+                    "dev/accuracy": dev_scores["accuracy"],
+                }
+            )
         if dev_scores["accuracy"] > best_acc:
             best_acc = dev_scores["accuracy"]
             save_checkpoint(model, classifier, args, "best")
 
     logger.info("Training completed.")
     logger.info(f"Best Dev Accuracy: {best_acc:.2f}")
+    if wandb:
+        wandb.log({"best/dev_accuracy": best_acc})
+        wandb.finish()
 
 
 def parse_args():
@@ -324,6 +358,12 @@ def parse_args():
 
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory for checkpoints")
+    parser.add_argument("--wandb", action="store_true",
+                        help="Log training metrics to Weights & Biases")
+    parser.add_argument("--wandb_project", type=str, default="sbert-mr",
+                        help="W&B project name")
+    parser.add_argument("--run_name", type=str, default=None,
+                        help="W&B run name (default: auto-generated)")
 
     args = parser.parse_args()
 
