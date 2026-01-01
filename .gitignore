@@ -1,3 +1,9 @@
+data
+checkpoints
+hf
+
+important_checkpoints/
+
 data/
 checkpoints/
 wandb/

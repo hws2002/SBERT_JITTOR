@@ -162,7 +162,6 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
         "iteration": iteration,
         "epoch": epoch,
         "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
         "base_model": args.base_model,
         "pooling": args.pooling,
     }
