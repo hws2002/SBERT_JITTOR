@@ -79,7 +79,11 @@ def setup_wandb(args):
     try:
         import wandb
 
-        run_name = args.run_name if args.run_name else f"sts-{args.base_model.split('/')[-1]}-{args.pooling}"
+        if args.run_name:
+            run_name = args.run_name
+        else:
+            suffix = "sts-nli" if args.start_from_checkpoints else "sts-only"
+            run_name = f"sts-{args.base_model.split('/')[-1]}-{args.pooling}-{suffix}"
         wandb.init(
             project=args.wandb_project,
             name=run_name,
@@ -586,6 +590,10 @@ def parse_args():
                         help="W&B run name (default: auto-generated)")
 
     args = parser.parse_args()
+
+    if args.output_dir is not None:
+        suffix = "sts-nli" if args.start_from_checkpoints else "sts-only"
+        args.output_dir = os.path.join(args.output_dir, suffix)
 
     if args.output_dir is None:
         model_name = args.base_model.replace("/", "-")
