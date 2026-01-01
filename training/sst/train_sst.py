@@ -400,6 +400,21 @@ def train(args):
         overwrite_cache=args.overwrite_cache,
         tokenize_batch_size=args.tokenize_batch_size,
     )
+    if "labels" in test_dataset.column_names:
+        before_count = len(test_dataset)
+        test_dataset = test_dataset.filter(
+            lambda ex: ex["labels"] >= 0,
+            desc="Filtering SST-2 test labels",
+        )
+        after_count = len(test_dataset)
+        removed = before_count - after_count
+        logger.info(f"SST-2 test labels filtered: kept {after_count}, removed {removed}.")
+    if "labels" not in test_dataset.column_names or len(test_dataset) == 0:
+        logger.warning("SST-2 test split has no labeled samples; skipping test eval.")
+        if wandb:
+            wandb.finish()
+        return
+
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.eval_batch_size,
@@ -409,6 +424,12 @@ def train(args):
     )
 
     test_scores = evaluate(model, classifier, test_loader)
+    if np.isnan(test_scores["loss"]) or np.isnan(test_scores["accuracy"]):
+        logger.warning("Test metrics are NaN; skipping W&B test logging.")
+        if wandb:
+            wandb.finish()
+        return
+
     logger.info(
         f"SST-2 Test - Loss: {test_scores['loss']:.4f}, Acc: {test_scores['accuracy']:.2f}"
     )
