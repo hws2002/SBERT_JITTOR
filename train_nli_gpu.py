@@ -534,14 +534,20 @@ def train(args):
     setup_device(args.use_cuda)
     wandb = setup_wandb(args)
 
-    tokenizer_source = args.base_model
+    tokenizer_source = args.tokenizer_dir or args.base_model
     if not os.path.isdir(tokenizer_source):
         mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
         candidate = os.path.join(HF_DIR, mapped)
         if os.path.isdir(candidate):
             tokenizer_source = candidate
+        elif args.encoder_checkpoint and os.path.isfile(args.encoder_checkpoint):
+            checkpoint_dir = os.path.dirname(args.encoder_checkpoint)
+            if os.path.isdir(checkpoint_dir):
+                tokenizer_source = checkpoint_dir
     if not os.path.isdir(tokenizer_source):
-        raise ValueError("Expected local model directory for tokenizer (base_model).")
+        raise ValueError(
+            "Expected local model directory for tokenizer (base_model or encoder_checkpoint dir)."
+        )
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
 
@@ -757,7 +763,8 @@ def train(args):
         collate_fn=collate_sts
     )
 
-    best_path = Path(args.output_dir) / "best.pkl"
+    safe_model = args.base_model.replace("/", "_")
+    best_path = Path(args.output_dir) / f"{safe_model}_best.pkl"
     if best_path.is_file():
         logger.info(f"Loading best checkpoint for final test: {best_path}")
         best_state = jt.load(str(best_path))
@@ -781,7 +788,7 @@ def train(args):
     logger.info("Final Evaluation on STS/SICKR Test Sets (Best Checkpoint)")
     logger.info("=" * 70)
 
-    best_path = Path(args.output_dir) / "best.pkl"
+    best_path = Path(args.output_dir) / f"{safe_model}_best.pkl"
     if best_path.is_file():
         logger.info(f"Loading best checkpoint for evaluation: {best_path}")
         best_state = jt.load(str(best_path))
@@ -983,6 +990,8 @@ def parse_args():
                         help="Training framework")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
+    parser.add_argument("--tokenizer_dir", type=str, default=None,
+                        help="Tokenizer directory (overrides base_model lookup)")
     parser.add_argument("--num_labels", type=int, default=3,
                         help="Number of NLI classification labels")
 
