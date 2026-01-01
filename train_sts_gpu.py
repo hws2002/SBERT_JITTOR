@@ -153,10 +153,11 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    safe_model = args.base_model.replace("/", "_")
     if name == "best":
-        checkpoint_path = output_dir / "best.pkl"
+        checkpoint_path = output_dir / f"{safe_model}_best.pkl"
     else:
-        checkpoint_path = output_dir / f"{name}.pkl"
+        checkpoint_path = output_dir / f"{safe_model}_{name}.pkl"
 
     checkpoint = {
         "iteration": iteration,
