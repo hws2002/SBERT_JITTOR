@@ -458,11 +458,9 @@ def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name="
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    safe_model = args.base_model.replace("/", "_")
     if name == "best":
-        checkpoint_path = output_dir / "best.pkl"
-    elif name == "checkpoint":
-        logger.info("Skipping non-best checkpoint save (encoder-only mode).")
-        return None
+        checkpoint_path = output_dir / f"{safe_model}_best.pkl"
     else:
         logger.info("Skipping non-best checkpoint save (encoder-only mode).")
         return None
