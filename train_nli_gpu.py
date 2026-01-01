@@ -976,8 +976,8 @@ def parse_args():
                         choices=["softmax", "complex"],
                         help="Loss function for NLI training")
     parser.add_argument("--ablation", type=int, default=0,
-                        choices=[0, 1, 2],
-                        help="Ablation feature set: 0=[u;v;|u-v|], 1=[u;v], 2=[|u-v|]")
+                        choices=[0, 1, 2, 3, 4, 5, 6],
+                        help="Ablation feature set: 0=[u;v;|u-v|], 1=[u;v], 2=[|u-v|], 3=[u*v], 4=[|u-v|;u*v], 5=[u;v;u*v], 6=[u;v;|u-v|;u*v]")
     parser.add_argument("--framework", default="jittor",
                         choices=["jittor", "torch"],
                         help="Training framework")

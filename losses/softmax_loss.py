@@ -14,6 +14,10 @@ class SoftmaxLoss(nn.Module):
     ablation=0: [u; v; |u - v|] (default)
     ablation=1: [u; v]
     ablation=2: [|u - v|]
+    ablation=3: [u * v]
+    ablation=4: [|u - v|; u * v]
+    ablation=5: [u; v; u * v]
+    ablation=6: [u; v; |u - v|; u * v]
     """
 
     def __init__(
@@ -33,6 +37,14 @@ class SoftmaxLoss(nn.Module):
             num_vectors = 2
         elif ablation == 2:
             num_vectors = 1
+        elif ablation == 3:
+            num_vectors = 1
+        elif ablation == 4:
+            num_vectors = 2
+        elif ablation == 5:
+            num_vectors = 3
+        elif ablation == 6:
+            num_vectors = 4
         else:
             num_vectors = 3 if concatenation_sent_difference else 2
 
@@ -67,6 +79,14 @@ class SoftmaxLoss(nn.Module):
             vectors = [rep_a, rep_b]
         elif self.ablation == 2:
             vectors = [jt.abs(rep_a - rep_b)]
+        elif self.ablation == 3:
+            vectors = [rep_a * rep_b]
+        elif self.ablation == 4:
+            vectors = [jt.abs(rep_a - rep_b), rep_a * rep_b]
+        elif self.ablation == 5:
+            vectors = [rep_a, rep_b, rep_a * rep_b]
+        elif self.ablation == 6:
+            vectors = [rep_a, rep_b, jt.abs(rep_a - rep_b), rep_a * rep_b]
         else:
             vectors = [rep_a, rep_b, jt.abs(rep_a - rep_b)]
         features = jt.concat(vectors, dim=1)
