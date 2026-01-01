@@ -65,7 +65,7 @@ python utils/download_data.py
 ```
 
 Datasets are stored under `./data/`:
-`SNLI`, `MultiNLI`, `STS-12..16`, `STS-B`, `SICKR`.
+`SNLI`, `MultiNLI`, `STS-12..16`, `STS-B`, `SICKR`, `SST-2`, `MR`.
 
 ## Data sources (Hugging Face)
 
@@ -116,6 +116,24 @@ The training scripts automatically load:
 
 ```bash
 python training/train_nli.py bert-large-uncased --pooling mean --use_cuda
+```
+
+### SST-2 training
+
+```bash
+python training/sst/train_sst.py bert-base-uncased \
+  --encoder_checkpoint ./hf/hf_bert_base/pytorch_model.bin \
+  --data_dir ./data --cache_dir ./data/tokenized \
+  --pooling mean --use_cuda
+```
+
+### MR training
+
+```bash
+python training/mr/train_mr.py bert-base-uncased \
+  --encoder_checkpoint ./hf/hf_bert_base/pytorch_model.bin \
+  --data_dir ./data --cache_dir ./data/tokenized \
+  --pooling mean --use_cuda
 ```
 
 ### GPU server training (cached + resume + checkpoints)
