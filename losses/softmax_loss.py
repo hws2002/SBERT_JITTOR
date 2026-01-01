@@ -9,17 +9,32 @@ from jittor import nn
 
 class SoftmaxLoss(nn.Module):
     """
-    Implements the SBERT NLI objective using [u; v; |u - v|] features
-    with a linear classifier and cross-entropy supervision.
+    Implements the SBERT NLI objective using ablation features.
+
+    ablation=0: [u; v; |u - v|] (default)
+    ablation=1: [u; v]
+    ablation=2: [|u - v|]
     """
 
-    def __init__(self, model, num_labels: int, concatenation_sent_difference: bool = True):
+    def __init__(
+        self,
+        model,
+        num_labels: int,
+        concatenation_sent_difference: bool = True,
+        ablation: int = 0,
+    ):
         super().__init__()
         self.model = model
         self.num_labels = num_labels
+        self.ablation = ablation
 
         embedding_dim = model.output_dim
-        num_vectors = 3 if concatenation_sent_difference else 2
+        if ablation == 1:
+            num_vectors = 2
+        elif ablation == 2:
+            num_vectors = 1
+        else:
+            num_vectors = 3 if concatenation_sent_difference else 2
 
         self.classifier = nn.Linear(embedding_dim * num_vectors, num_labels)
         self._init_classifier(self.classifier)
@@ -48,7 +63,12 @@ class SoftmaxLoss(nn.Module):
             token_type_ids=batch.get("token_type_ids_b", None),
         )
 
-        vectors = [rep_a, rep_b, jt.abs(rep_a - rep_b)]
+        if self.ablation == 1:
+            vectors = [rep_a, rep_b]
+        elif self.ablation == 2:
+            vectors = [jt.abs(rep_a - rep_b)]
+        else:
+            vectors = [rep_a, rep_b, jt.abs(rep_a - rep_b)]
         features = jt.concat(vectors, dim=1)
         logits = self.classifier(features)
         loss = self.loss_fct(logits, labels)

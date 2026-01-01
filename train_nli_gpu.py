@@ -424,7 +424,11 @@ def setup_wandb(args):
     try:
         import wandb
 
-        run_name = args.run_name if args.run_name else f"nli-{args.base_model.split('/')[-1]}-{args.pooling}"
+        if args.run_name:
+            run_name = args.run_name
+        else:
+            ablation_suffix = f"-abl{args.ablation}" if args.ablation else ""
+            run_name = f"nli-{args.base_model.split('/')[-1]}-{args.pooling}{ablation_suffix}"
 
         wandb.init(
             project=args.wandb_project,
@@ -433,6 +437,7 @@ def setup_wandb(args):
                 "model": args.base_model,
                 "pooling": args.pooling,
                 "loss": args.loss,
+                "ablation": args.ablation,
                 "batch_size": args.batch_size,
                 "learning_rate": args.lr,
                 "max_length": args.max_length,
@@ -577,9 +582,17 @@ def train(args):
     logger.info(f"Model embedding dimension: {model.output_dim}")
 
     if args.loss == "complex":
-        train_loss = ComplexSoftmaxLoss(model=model, num_labels=args.num_labels)
+        train_loss = ComplexSoftmaxLoss(
+            model=model,
+            num_labels=args.num_labels,
+            ablation=args.ablation,
+        )
     else:
-        train_loss = SoftmaxLoss(model=model, num_labels=args.num_labels)
+        train_loss = SoftmaxLoss(
+            model=model,
+            num_labels=args.num_labels,
+            ablation=args.ablation,
+        )
     optimizer = nn.Adam(train_loss.parameters(), lr=args.lr)
     warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
     logger.info(f"Warmup steps: {warmup_steps}")
@@ -962,6 +975,9 @@ def parse_args():
     parser.add_argument("--loss", default="softmax",
                         choices=["softmax", "complex"],
                         help="Loss function for NLI training")
+    parser.add_argument("--ablation", type=int, default=0,
+                        choices=[0, 1, 2],
+                        help="Ablation feature set: 0=[u;v;|u-v|], 1=[u;v], 2=[|u-v|]")
     parser.add_argument("--framework", default="jittor",
                         choices=["jittor", "torch"],
                         help="Training framework")
