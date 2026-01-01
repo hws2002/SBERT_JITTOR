@@ -1,15 +1,14 @@
 """
 Train SBERTJittor on SST-2 classification.
 
-Mirrors train_nli_gpu.py style with warmup and eval.
-Default trains classifier-only; use --train_encoder for full fine-tuning.
-Checkpoint saving is disabled.
+Mirrors train_mr.py style (warmup, eval, no checkpoint saving).
 """
 
 import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Dict, Iterable, List
 
 import numpy as np
@@ -203,7 +202,7 @@ def train(args):
     logger.info(f"Learning rate: {args.lr}")
     logger.info(f"Max length: {args.max_length}")
     logger.info(f"Epochs: {args.epochs}")
-    logger.info("Checkpoint saving disabled.")
+    logger.info("Checkpoint saving disabled (train-only run).")
     logger.info("=" * 70)
 
     setup_device(args.use_cuda)
@@ -472,6 +471,8 @@ def parse_args():
                         help="Log metrics every N steps")
     parser.add_argument("--eval_steps", type=int, default=500,
                         help="Evaluate on validation set every N steps")
+    # Checkpoint saving disabled by default for SST-2 training
+
     parser.add_argument("--wandb", action="store_true",
                         help="Log training metrics to Weights & Biases")
     parser.add_argument("--wandb_project", type=str, default="sbert-sst",
