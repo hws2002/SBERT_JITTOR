@@ -27,7 +27,8 @@ from datasets import load_from_disk, concatenate_datasets
 from torch.utils.data import DataLoader
 
 from model.sbert_model import SBERTJittor
-from losses import SoftmaxLoss
+from losses.softmax_loss import SoftmaxLoss
+from losses.complex_softmax_loss import ComplexSoftmaxLoss
 
 # Set the log level to INFO
 logging.basicConfig(
