@@ -390,10 +390,10 @@ def train(args):
         total_correct = 0
         total_samples = 0
 
-    logger.info("\nFinal Evaluation on SST-2 Test Split")
+    logger.info("\nFinal Evaluation on SST-2 Validation Split (as test)")
     test_dataset = prepare_sst_dataset(
         data_dir=args.data_dir,
-        split="test",
+        split="validation",
         tokenizer=tokenizer,
         max_length=args.max_length,
         cache_dir=cache_dir,
@@ -410,7 +410,7 @@ def train(args):
         removed = before_count - after_count
         logger.info(f"SST-2 test labels filtered: kept {after_count}, removed {removed}.")
     if "labels" not in test_dataset.column_names or len(test_dataset) == 0:
-        logger.warning("SST-2 test split has no labeled samples; skipping test eval.")
+        logger.warning("SST-2 validation split has no labeled samples; skipping final eval.")
         if wandb:
             wandb.finish()
         return
