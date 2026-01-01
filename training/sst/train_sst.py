@@ -1,16 +1,15 @@
 """
 Train SBERTJittor on SST-2 classification.
 
-Mirrors train_nli_gpu.py style with warmup, eval, and best checkpoint.
+Mirrors train_nli_gpu.py style with warmup and eval.
 Default trains classifier-only; use --train_encoder for full fine-tuning.
+Checkpoint saving is disabled.
 """
 
 import argparse
 import logging
 import os
 import sys
-import time
-from pathlib import Path
 from typing import Dict, Iterable, List
 
 import numpy as np
@@ -194,48 +193,6 @@ def evaluate(model, classifier, dataloader) -> Dict[str, float]:
     return {"loss": avg_loss, "accuracy": acc}
 
 
-def save_checkpoint(model, classifier, optimizer, iteration, epoch, args, name: str):
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    safe_model = args.base_model.replace("/", "_")
-    if name == "best":
-        checkpoint_path = output_dir / f"{safe_model}_best.pkl"
-    else:
-        checkpoint_path = output_dir / f"{safe_model}_{name}.pkl"
-
-    payload = {
-        "iteration": iteration,
-        "epoch": epoch,
-        "model_state": model.state_dict(),
-        "classifier_state": classifier.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-        "base_model": args.base_model,
-        "pooling": args.pooling,
-        "num_labels": args.num_labels,
-    }
-    jt.save(payload, str(checkpoint_path))
-    logger.info(f"Checkpoint saved: {checkpoint_path}")
-    return checkpoint_path
-
-
-def load_training_checkpoint(model, classifier, optimizer, checkpoint_path: str):
-    logger.info(f"Loading training checkpoint: {checkpoint_path}")
-    checkpoint = jt.load(checkpoint_path)
-    model.load_state_dict(checkpoint["model_state"])
-    if "classifier_state" in checkpoint:
-        classifier.load_state_dict(checkpoint["classifier_state"])
-    if optimizer is not None and "optimizer_state" in checkpoint:
-        try:
-            optimizer.load_state_dict(checkpoint["optimizer_state"])
-        except Exception as exc:
-            logger.warning(f"Failed to load optimizer state: {exc}")
-
-    global_step = int(checkpoint.get("iteration", 0))
-    start_epoch = max(int(checkpoint.get("epoch", 1)) - 1, 0)
-    logger.info(f"Resuming from step {global_step}, epoch {start_epoch + 1}")
-    return global_step, start_epoch
-
-
 def train(args):
     logger.info("=" * 70)
     logger.info("SBERT SST-2 Training")
@@ -246,7 +203,7 @@ def train(args):
     logger.info(f"Learning rate: {args.lr}")
     logger.info(f"Max length: {args.max_length}")
     logger.info(f"Epochs: {args.epochs}")
-    logger.info(f"Output dir: {args.output_dir}")
+    logger.info("Checkpoint saving disabled.")
     logger.info("=" * 70)
 
     setup_device(args.use_cuda)
@@ -324,10 +281,6 @@ def train(args):
 
     global_step = 0
     start_epoch = 0
-    if args.start_from_checkpoints:
-        global_step, start_epoch = load_training_checkpoint(
-            model, classifier, optimizer, args.start_from_checkpoints
-        )
 
     logger.info("Evaluation before training:")
     eval_before = evaluate(model, classifier, dev_loader)
@@ -420,10 +373,6 @@ def train(args):
                     )
                 if eval_scores["accuracy"] > best_acc:
                     best_acc = eval_scores["accuracy"]
-                    save_checkpoint(model, classifier, optimizer, global_step, epoch + 1, args, name="best")
-
-            if args.save_steps > 0 and global_step % args.save_steps == 0:
-                save_checkpoint(model, classifier, optimizer, global_step, epoch + 1, args, name="checkpoint")
 
         logger.info(
             f"\nEpoch {epoch + 1}/{args.epochs} Summary: "
@@ -523,13 +472,6 @@ def parse_args():
                         help="Log metrics every N steps")
     parser.add_argument("--eval_steps", type=int, default=500,
                         help="Evaluate on validation set every N steps")
-    parser.add_argument("--save_steps", type=int, default=0,
-                        help="Save checkpoint every N steps (0 to disable)")
-    parser.add_argument("--start_from_checkpoints", type=str, default=None,
-                        help="Path to a saved checkpoint to resume training")
-    parser.add_argument("--output_dir", type=str, default=None,
-                        help="Output directory for checkpoints")
-
     parser.add_argument("--wandb", action="store_true",
                         help="Log training metrics to Weights & Biases")
     parser.add_argument("--wandb_project", type=str, default="sbert-sst",
@@ -538,11 +480,6 @@ def parse_args():
                         help="W&B run name (default: auto-generated)")
 
     args = parser.parse_args()
-
-    if args.output_dir is None:
-        model_name = args.base_model.replace("/", "-")
-        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-        args.output_dir = f"checkpoints/training_sst_{model_name}-{timestamp}"
 
     return args
 
