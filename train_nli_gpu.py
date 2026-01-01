@@ -461,23 +461,32 @@ def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name="
     if name == "best":
         checkpoint_path = output_dir / "best.pkl"
     elif name == "checkpoint":
-        checkpoint_path = output_dir / "checkpoint_latest.pkl"
+        logger.info("Skipping non-best checkpoint save (encoder-only mode).")
+        return None
     else:
-        checkpoint_path = output_dir / f"{name}_step{iteration}.pkl"
+        logger.info("Skipping non-best checkpoint save (encoder-only mode).")
+        return None
 
     checkpoint = {
-        "iteration": iteration,
-        "epoch": epoch,
         "model_state": model.state_dict(),
-        "loss_state": _filtered_loss_state(train_loss),
-        "optimizer_state": optimizer.state_dict(),
         "base_model": args.base_model,
         "pooling": args.pooling,
-        "num_labels": args.num_labels,
     }
 
     jt.save(checkpoint, str(checkpoint_path))
     logger.info(f"Checkpoint saved: {checkpoint_path}")
+    return checkpoint_path
+
+
+def save_encoder_only(model, args, output_dir: Path, name: str):
+    payload = {
+        "model_state": model.state_dict(),
+        "base_model": args.base_model,
+        "pooling": args.pooling,
+    }
+    checkpoint_path = output_dir / f"{name}.pkl"
+    jt.save(payload, str(checkpoint_path))
+    logger.info(f"Encoder-only checkpoint saved: {checkpoint_path}")
     return checkpoint_path
 
 
@@ -747,22 +756,10 @@ def train(args):
             "test/spearman": test_results["spearman"],
         })
 
-    logger.info("\nSaving final model...")
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    final_dir = output_dir / "final"
-    final_dir.mkdir(exist_ok=True)
-    final_path = final_dir / f"sbert_{args.base_model.replace('/', '_')}_{args.pooling}.pkl"
-
-    # Save SBERTJittor-only weights (inference-ready).
-    model.save(str(final_path))
-
     logger.info("\n" + "=" * 70)
     logger.info("Training completed!")
     logger.info(f"Best Spearman score (dev): {best_spearman:.2f}")
     logger.info(f"Final Spearman score (test): {test_results['spearman']:.2f}")
-    logger.info(f"Final model saved: {final_path}")
     logger.info("=" * 70)
 
     logger.info("\n" + "=" * 70)
