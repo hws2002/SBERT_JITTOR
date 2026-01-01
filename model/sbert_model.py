@@ -8,6 +8,7 @@ Modular architecture inspired by sentence-transformers:
 """
 
 from typing import Dict, Optional, Literal
+import os
 import jittor as jt
 from jittor import nn
 
@@ -26,6 +27,11 @@ except ImportError:
     from heads import IdentityHead, LinearHead, MLPHead
 
 from jittor_utils.load_pytorch import load_pytorch
+
+MODEL_REGISTRY = {
+    # Example:
+    # "roberta-base-nli-mean": "/path/to/roberta-base-nli-mean.pkl",
+}
 
 
 # ============================================================================
@@ -350,6 +356,46 @@ class SBERTJittor(nn.Module):
         if checkpoint['head_state'] is not None:
             self.head.load_state_dict(checkpoint['head_state'])
         print(f"Model loaded from {load_path}")
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_id: str,
+        *,
+        base_model: Optional[str] = None,
+        pooling: Literal['mean', 'cls', 'max'] = 'mean',
+        registry: Optional[Dict[str, str]] = None,
+    ):
+        """
+        Load SBERTJittor from a local checkpoint registry.
+        """
+        model_path = None
+        if os.path.isfile(model_id):
+            model_path = model_id
+        else:
+            lookup = registry if registry is not None else MODEL_REGISTRY
+            model_path = lookup.get(model_id)
+
+        if model_path is None:
+            raise ValueError(
+                "Unknown model_id. Provide a local path or add it to MODEL_REGISTRY."
+            )
+
+        payload = jt.load(model_path)
+        if not isinstance(payload, dict) or "model_state" not in payload:
+            raise ValueError("Expected a Jittor checkpoint with model_state.")
+
+        model_name = base_model or payload.get("base_model", "bert-base-uncased")
+        pooling = payload.get("pooling", pooling)
+
+        model = cls(
+            encoder_name=model_name,
+            pooling=pooling,
+            head_type="none",
+            checkpoint_path=None,
+        )
+        model.load_state_dict(payload["model_state"])
+        return model
 
 
 def _remap_hf_encoder_state(state_dict: dict) -> dict:
