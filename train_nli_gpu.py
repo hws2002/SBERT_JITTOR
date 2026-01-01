@@ -432,6 +432,7 @@ def setup_wandb(args):
             config={
                 "model": args.base_model,
                 "pooling": args.pooling,
+                "loss": args.loss,
                 "batch_size": args.batch_size,
                 "learning_rate": args.lr,
                 "max_length": args.max_length,
@@ -575,7 +576,10 @@ def train(args):
     )
     logger.info(f"Model embedding dimension: {model.output_dim}")
 
-    train_loss = SoftmaxLoss(model=model, num_labels=args.num_labels)
+    if args.loss == "complex":
+        train_loss = ComplexSoftmaxLoss(model=model, num_labels=args.num_labels)
+    else:
+        train_loss = SoftmaxLoss(model=model, num_labels=args.num_labels)
     optimizer = nn.Adam(train_loss.parameters(), lr=args.lr)
     warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
     logger.info(f"Warmup steps: {warmup_steps}")
@@ -955,6 +959,9 @@ def parse_args():
     parser.add_argument("--pooling", default="mean",
                         choices=["mean", "cls", "max"],
                         help="Pooling strategy")
+    parser.add_argument("--loss", default="softmax",
+                        choices=["softmax", "complex"],
+                        help="Loss function for NLI training")
     parser.add_argument("--framework", default="jittor",
                         choices=["jittor", "torch"],
                         help="Training framework")
