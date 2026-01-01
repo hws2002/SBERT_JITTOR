@@ -132,13 +132,12 @@ python train_nli_gpu.py bert-large-uncased \
 ```
 
 Checkpoint behavior:
-- `best.pkl` keeps the best validation score.
-- `checkpoint_latest.pkl` keeps the most recent periodic checkpoint.
+- `{model_name}_best.pkl` keeps the best validation score.
 
 Resume training:
 ```bash
 python train_nli_gpu.py bert-large-uncased \
-  --start_from_checkpoints ./output/best.pkl \
+  --start_from_checkpoints ./output/bert-large-uncased_best.pkl \
   --use_cuda
 ```
 
@@ -155,6 +154,27 @@ python evaluation/evaluate.py \
 
 Supported datasets:
 `sts12`, `sts13`, `sts14`, `sts15`, `sts16`, `stsb`, `sick-r`, `all`.
+
+### BERT STS baselines
+
+Bi-encoder (mean/cls pooling + cosine similarity):
+
+```bash
+python evaluation/sts/evaluate_bert_bi.py \
+  --base_model bert-base-uncased \
+  --pooling cls \
+  --model_root ./hf \
+  --encoder_checkpoint ./hf/hf_bert_base/pytorch_model.bin \
+  --datasets stsb
+```
+
+Cross-encoder (pair input + regression head):
+
+```bash
+python evaluation/sts/evaluate_bert_cross.py \
+  --model_path ./hf/hf_bert_base_stsb \
+  --datasets stsb
+```
 
 ## Typical usage (code)
 
