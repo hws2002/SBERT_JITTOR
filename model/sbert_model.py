@@ -187,6 +187,9 @@ class SBERTJittor(nn.Module):
                     max_position_embeddings=514,  # RoBERTa uses 514
                     type_vocab_size=1,  # RoBERTa doesn't use token type IDs
                     initializer_range=0.02,
+                    layer_norm_eps=1e-5,
+                    pad_token_id=1,
+                    use_token_type_embeddings=False,
                 )
             elif 'large' in encoder_lower:
                 return BertConfig(
@@ -200,6 +203,9 @@ class SBERTJittor(nn.Module):
                     max_position_embeddings=514,
                     type_vocab_size=1,
                     initializer_range=0.02,
+                    layer_norm_eps=1e-5,
+                    pad_token_id=1,
+                    use_token_type_embeddings=False,
                 )
 
         # BERT models
@@ -314,7 +320,16 @@ class SBERTJittor(nn.Module):
         """Load encoder weights from PyTorch checkpoint"""
         print(f"Loading checkpoint from {checkpoint_path}")
         state_dict = load_pytorch(checkpoint_path)
-        self.encoder.load_state_dict(state_dict)
+        state_dict = _remap_hf_encoder_state(state_dict)
+        encoder_keys = set(self.encoder.state_dict().keys())
+        filtered = {k: v for k, v in state_dict.items() if k in encoder_keys}
+        missing = encoder_keys.difference(filtered.keys())
+        unexpected = set(state_dict.keys()).difference(encoder_keys)
+        if unexpected:
+            print(f"Warning: {len(unexpected)} unexpected keys ignored when loading encoder.")
+        if missing:
+            print(f"Warning: {len(missing)} encoder keys not found in checkpoint.")
+        self.encoder.load_state_dict(filtered)
         print("Checkpoint loaded successfully")
 
     def save(self, save_path: str):
@@ -335,6 +350,29 @@ class SBERTJittor(nn.Module):
         if checkpoint['head_state'] is not None:
             self.head.load_state_dict(checkpoint['head_state'])
         print(f"Model loaded from {load_path}")
+
+
+def _remap_hf_encoder_state(state_dict: dict) -> dict:
+    if not isinstance(state_dict, dict):
+        return state_dict
+
+    has_roberta = any(key.startswith("roberta.") for key in state_dict)
+    if not has_roberta:
+        return state_dict
+
+    remapped = {}
+    for key, value in state_dict.items():
+        if key.startswith("roberta."):
+            new_key = key[len("roberta."):]
+        elif key.startswith("bert."):
+            new_key = key[len("bert."):]
+        else:
+            new_key = key
+
+        if new_key.startswith(("lm_head.", "cls.", "classifier.")):
+            continue
+        remapped[new_key] = value
+    return remapped
 
 
 if __name__ == "__main__":
