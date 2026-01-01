@@ -84,6 +84,36 @@ def download_sts_benchmark(data_dir='./data'):
     print("=" * 60)
 
 
+def download_sst(data_dir='./data'):
+    """
+    Download Stanford SST-2 dataset.
+    """
+    print("\n" + "=" * 60)
+    print("Downloading SST-2 Dataset")
+    print("=" * 60)
+    sst = load_dataset("stanfordnlp/sst2")
+    sst.save_to_disk(os.path.join(data_dir, 'SST-2'))
+    print(f"SST-2 saved to {os.path.join(data_dir, 'SST-2')}")
+    print(f"  - Train: {len(sst['train'])} examples")
+    print(f"  - Validation: {len(sst['validation'])} examples")
+    print(f"  - Test: {len(sst['test'])} examples")
+
+
+def download_mr(data_dir='./data'):
+    """
+    Download MR (Movie Review) dataset (Rotten Tomatoes).
+    """
+    print("\n" + "=" * 60)
+    print("Downloading MR (Rotten Tomatoes) Dataset")
+    print("=" * 60)
+    mr = load_dataset("rotten_tomatoes")
+    mr.save_to_disk(os.path.join(data_dir, 'MR'))
+    print(f"MR saved to {os.path.join(data_dir, 'MR')}")
+    print(f"  - Train: {len(mr['train'])} examples")
+    print(f"  - Validation: {len(mr['validation'])} examples")
+    print(f"  - Test: {len(mr['test'])} examples")
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -94,6 +124,10 @@ if __name__ == "__main__":
                         help='Download only NLI datasets')
     parser.add_argument('--sts_only', action='store_true',
                         help='Download only STS datasets')
+    parser.add_argument('--sst_only', action='store_true',
+                        help='Download only SST-2 dataset')
+    parser.add_argument('--mr_only', action='store_true',
+                        help='Download only MR dataset')
     args = parser.parse_args()
 
     # make directories
@@ -103,14 +137,20 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(args.data_dir, 'STS-Benchmark'), exist_ok=True)
 
     # download
-    if not args.sts_only:
+    if not (args.sts_only or args.sst_only or args.mr_only):
         download_nli_datasets(args.data_dir)
 
-    if not args.nli_only:
+    if not args.nli_only and not args.sst_only and not args.mr_only:
         download_sts_benchmark(args.data_dir)
-    else :
-        download_nli_datasets(args.data_dir)
-        download_sts_benchmark(args.data_dir)
+
+    if args.sst_only:
+        download_sst(args.data_dir)
+    elif not args.nli_only and not args.mr_only:
+        download_sst(args.data_dir)
+    if args.mr_only:
+        download_mr(args.data_dir)
+    elif not args.nli_only and not args.sst_only:
+        download_mr(args.data_dir)
 
     print("\n" + "=" * 60)
     print("Done!")
