@@ -218,7 +218,7 @@ def save_eval_results(results: Dict[str, float], args, output_dir: Path):
 
 
 def _resolve_tokenizer_source(args) -> str:
-    tokenizer_source = args.base_model
+    tokenizer_source = args.tokenizer_dir or args.base_model
     if not os.path.isdir(tokenizer_source):
         mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
         candidate = os.path.join(HF_DIR, mapped)
@@ -529,6 +529,8 @@ def parse_args():
                         help="Pooling strategy")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
+    parser.add_argument("--tokenizer_dir", type=str, default=None,
+                        help="Tokenizer directory (overrides base_model lookup)")
 
     parser.add_argument("--data_dir", default="./data",
                         help="Directory containing datasets")
