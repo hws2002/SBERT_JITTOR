@@ -311,11 +311,28 @@ def evaluate_sts(model, dataloader):
             if sim_np.shape[0] != scores_np.shape[0]:
                 logger.warning(
                     f"STS eval length mismatch (pred {sim_np.shape[0]} vs scores {scores_np.shape[0]}). "
-                    "Trimming to min length."
+                    "Recomputing per-sample."
                 )
-                min_len = min(sim_np.shape[0], scores_np.shape[0])
-                sim_np = sim_np[:min_len]
-                scores_np = scores_np[:min_len]
+                preds = []
+                for idx in range(scores_np.shape[0]):
+                    emb_a_i = model.encode(
+                        jt_batch["input_ids_a"][idx:idx + 1],
+                        jt_batch["attention_mask_a"][idx:idx + 1],
+                        jt_batch.get("token_type_ids_a", None)[idx:idx + 1]
+                        if "token_type_ids_a" in jt_batch else None,
+                    )
+                    emb_b_i = model.encode(
+                        jt_batch["input_ids_b"][idx:idx + 1],
+                        jt_batch["attention_mask_b"][idx:idx + 1],
+                        jt_batch.get("token_type_ids_b", None)[idx:idx + 1]
+                        if "token_type_ids_b" in jt_batch else None,
+                    )
+                    emb_a_i = emb_a_i.numpy().reshape(1, -1)
+                    emb_b_i = emb_b_i.numpy().reshape(1, -1)
+                    denom_i = np.linalg.norm(emb_a_i, axis=1) * np.linalg.norm(emb_b_i, axis=1) + 1e-9
+                    sim_i = np.sum(emb_a_i * emb_b_i, axis=1) / denom_i
+                    preds.append(float(sim_i[0]))
+                sim_np = np.asarray(preds)
             all_predictions.extend(sim_np.tolist())
             all_scores.extend(scores_np.tolist())
 
@@ -613,7 +630,11 @@ def train(args):
             num_labels=args.num_labels,
             ablation=args.ablation,
         )
-    optimizer = nn.Adam(train_loss.parameters(), lr=args.lr)
+    optimizer = jt.optim.AdamW(
+        train_loss.parameters(),
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+    )
     warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
     logger.info(f"Warmup steps: {warmup_steps}")
 
@@ -1024,6 +1045,8 @@ def parse_args():
                         help="Number of training epochs")
     parser.add_argument("--lr", type=float, default=2e-5,
                         help="Learning rate")
+    parser.add_argument("--weight_decay", type=float, default=0.01,
+                        help="Weight decay for AdamW")
     parser.add_argument("--warmup_ratio", type=float, default=0.1,
                         help="Warmup ratio (fraction of total steps)")
 
