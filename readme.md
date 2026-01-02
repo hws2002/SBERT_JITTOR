@@ -74,6 +74,8 @@ Datasets are stored under `./data/`:
 - **STS12-16**: https://huggingface.co/datasets/mteb/sts12-sts, https://huggingface.co/datasets/mteb/sts13-sts, https://huggingface.co/datasets/mteb/sts14-sts, https://huggingface.co/datasets/mteb/sts15-sts, https://huggingface.co/datasets/mteb/sts16-sts
 - **STS-B**: https://huggingface.co/datasets/mteb/stsbenchmark-sts
 - **SICK-R**: https://huggingface.co/datasets/mteb/sickr-sts
+- **SST-2**: https://huggingface.co/datasets/glue
+- **MR (Rotten Tomatoes)**: https://huggingface.co/datasets/rotten_tomatoes
 
 ### 2) Tokenizer (local)
 
