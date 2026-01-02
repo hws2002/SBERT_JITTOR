@@ -411,7 +411,7 @@ def train(args):
                             "step": global_step,
                         }
                     )
-                if eval_results["spearman"] > best_spearman:
+                if not args.disable_checkpoint and eval_results["spearman"] > best_spearman:
                     best_spearman = eval_results["spearman"]
                     save_checkpoint(model, optimizer, global_step, epoch + 1, args, name="best")
 
@@ -570,6 +570,8 @@ def parse_args():
                         help="Evaluate on STS benchmark every N steps")
     parser.add_argument("--save_steps", type=int, default=1000,
                         help="Save checkpoint every N steps (0 to disable)")
+    parser.add_argument("--disable_checkpoint", action="store_true",
+                        help="Disable saving best checkpoints")
     parser.add_argument("--num_workers", type=int, default=4,
                         help="DataLoader worker processes")
     parser.add_argument("--use_cuda", action="store_true",
