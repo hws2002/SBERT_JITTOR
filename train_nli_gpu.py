@@ -306,8 +306,18 @@ def evaluate_sts(model, dataloader):
             denom = np.linalg.norm(emb_a_np, axis=1) * np.linalg.norm(emb_b_np, axis=1) + 1e-9
             sim = np.sum(emb_a_np * emb_b_np, axis=1) / denom
 
-            all_predictions.extend(sim.tolist())
-            all_scores.extend(np.asarray(batch["scores"]).tolist())
+            scores_np = jt_batch["scores"].numpy().reshape(-1)
+            sim_np = np.asarray(sim).reshape(-1)
+            if sim_np.shape[0] != scores_np.shape[0]:
+                logger.warning(
+                    f"STS eval length mismatch (pred {sim_np.shape[0]} vs scores {scores_np.shape[0]}). "
+                    "Trimming to min length."
+                )
+                min_len = min(sim_np.shape[0], scores_np.shape[0])
+                sim_np = sim_np[:min_len]
+                scores_np = scores_np[:min_len]
+            all_predictions.extend(sim_np.tolist())
+            all_scores.extend(scores_np.tolist())
 
     pearson_corr, _ = pearsonr(all_predictions, all_scores)
     spearman_corr, _ = spearmanr(all_predictions, all_scores)
