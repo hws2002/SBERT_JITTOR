@@ -85,7 +85,10 @@ class Pooling(nn.Module):
                 token_embeddings,
                 jt.array(-1e9)
             )
-            return jt.max(masked_embeddings, dim=1)[0]
+            pooled = jt.max(masked_embeddings, dim=1)[0]
+            if pooled.ndim == 1:
+                pooled = pooled.unsqueeze(0)
+            return pooled
 
         else:
             raise ValueError(f"Unknown pooling mode: {self.pooling_mode}")

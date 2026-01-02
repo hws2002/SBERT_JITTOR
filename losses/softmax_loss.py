@@ -89,7 +89,12 @@ class SoftmaxLoss(nn.Module):
             vectors = [rep_a, rep_b, jt.abs(rep_a - rep_b), rep_a * rep_b]
         else:
             vectors = [rep_a, rep_b, jt.abs(rep_a - rep_b)]
-        features = jt.concat(vectors, dim=1)
+        fixed_vectors = []
+        for vec in vectors:
+            if vec.ndim == 1:
+                vec = vec.unsqueeze(0)
+            fixed_vectors.append(vec)
+        features = jt.concat(fixed_vectors, dim=1)
         logits = self.classifier(features)
         loss = self.loss_fct(logits, labels)
         return loss, logits
