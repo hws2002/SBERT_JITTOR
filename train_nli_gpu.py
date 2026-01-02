@@ -299,6 +299,10 @@ def evaluate_sts(model, dataloader):
 
             emb_a_np = emb_a.numpy()
             emb_b_np = emb_b.numpy()
+            if emb_a_np.ndim == 1:
+                emb_a_np = emb_a_np.reshape(1, -1)
+            if emb_b_np.ndim == 1:
+                emb_b_np = emb_b_np.reshape(1, -1)
             denom = np.linalg.norm(emb_a_np, axis=1) * np.linalg.norm(emb_b_np, axis=1) + 1e-9
             sim = np.sum(emb_a_np * emb_b_np, axis=1) / denom
 
