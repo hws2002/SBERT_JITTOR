@@ -12,6 +12,7 @@ wheels/
 output/
 hf/
 <<<<<<<<< Temporary merge branch 1
+.ipynb_*
 
 debug/
 =========
