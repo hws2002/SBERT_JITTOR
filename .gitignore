@@ -1,12 +1,4 @@
-checkpoints
-hf
-data
-
 data/
-important_checkpoints/
-
-training_data/
-
 checkpoints/
 wandb/
 
@@ -19,5 +11,14 @@ wheels/
 
 output/
 hf/
+<<<<<<<<< Temporary merge branch 1
 
 debug/
+=========
+debug/
+result/
+
+test.py
+
+torun.sh
+>>>>>>>>> Temporary merge branch 2
