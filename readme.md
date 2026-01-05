@@ -51,6 +51,10 @@ python training/mr/train_mr.py bert-base-uncased --data_dir ./data --pooling mea
 python training/sst/train_sst.py bert-base-uncased --data_dir ./data --pooling mean --use_cuda
 ```
 
+Tokenizer note:
+- Recommended: pre-download a local tokenizer to reduce AutoTokenizer download time.
+- Optional: if missing, AutoTokenizer will download from Hugging Face.
+
 ### Local dataset layout
 
 Place raw datasets under `./data` (no Hugging Face datasets dependency):

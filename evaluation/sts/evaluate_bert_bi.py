@@ -87,7 +87,7 @@ def evaluate_bi_encoder(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        collate_fn=collate_sts,
+        collate_batch=collate_sts,
     )
 
     all_predictions = []

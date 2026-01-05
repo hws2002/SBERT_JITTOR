@@ -132,7 +132,7 @@ def train(args):
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        collate_fn=collate_sst,
+        collate_batch=collate_sst,
     )
 
     logger.info("Preparing SST-2 validation data...")
@@ -150,7 +150,7 @@ def train(args):
         batch_size=args.eval_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_sst,
+        collate_batch=collate_sst,
     )
 
     total_steps = args.epochs * len(train_loader)
@@ -274,7 +274,7 @@ def train(args):
         batch_size=args.eval_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_sst,
+        collate_batch=collate_sst,
     )
 
     test_scores = evaluate(model, classifier, test_loader)

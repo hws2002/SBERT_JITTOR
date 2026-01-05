@@ -44,6 +44,7 @@ class NumpyDictDataset(JtDataset):
         self.arrays = arrays
         first = next(iter(arrays.values()))
         self.set_attrs(total_len=len(first))
+        self.collate_batch = None
 
     def __getitem__(self, idx):
         return {k: v[idx] for k, v in self.arrays.items()}

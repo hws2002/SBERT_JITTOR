@@ -90,7 +90,7 @@ def train(args):
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        collate_fn=collate_nli
+        collate_batch=collate_nli
     )
 
     total_steps = args.epochs * len(train_dataloader)
@@ -143,7 +143,7 @@ def train(args):
         batch_size=args.eval_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_sts
+        collate_batch=collate_sts
     )
 
     logger.info("\nEvaluation before training:")
@@ -254,7 +254,7 @@ def train(args):
         batch_size=args.eval_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_sts
+        collate_batch=collate_sts
     )
 
     safe_model = safe_model_name(args.base_model)

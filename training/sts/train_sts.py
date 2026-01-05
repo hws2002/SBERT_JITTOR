@@ -83,7 +83,7 @@ def train(args):
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        collate_fn=collate_sts,
+        collate_batch=collate_sts,
     )
 
     logger.info("Preparing STS evaluation data (cached tokenization)...")
@@ -102,7 +102,7 @@ def train(args):
         batch_size=args.eval_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_sts,
+        collate_batch=collate_sts,
     )
 
     total_steps = args.epochs * len(train_dataloader)
@@ -231,7 +231,7 @@ def train(args):
         batch_size=args.eval_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_sts,
+        collate_batch=collate_sts,
     )
 
     best_path = checkpoint_path(args.output_dir, args.base_model, "best")

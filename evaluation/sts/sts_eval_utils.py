@@ -136,7 +136,7 @@ def evaluate_sts_all(
             batch_size=eval_batch_size,
             shuffle=False,
             num_workers=num_workers,
-            collate_fn=collate_sts,
+            collate_batch=collate_sts,
         )
         logger.info(f"Evaluating {dataset_name} ({split})...")
         scores = evaluate_sts(model=model, dataloader=sts_dataloader, desc=f"Evaluating {dataset_name}")

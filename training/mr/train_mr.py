@@ -133,7 +133,7 @@ def train(args):
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        collate_fn=collate_mr,
+        collate_batch=collate_mr,
     )
 
     logger.info("Preparing MR validation data...")
@@ -151,7 +151,7 @@ def train(args):
         batch_size=args.eval_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_mr,
+        collate_batch=collate_mr,
     )
 
     total_steps = args.epochs * len(train_loader)
@@ -275,7 +275,7 @@ def train(args):
         batch_size=args.eval_batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_mr,
+        collate_batch=collate_mr,
     )
 
     test_scores = evaluate(model, classifier, test_loader)
