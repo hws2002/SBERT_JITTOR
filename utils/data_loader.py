@@ -330,14 +330,26 @@ def _parse_sts_rows(header: List[str], rows: List[List[str]]) -> Tuple[List[str]
         s2_idx = lower.index("sentence2") if "sentence2" in lower else None
         score_idx = lower.index("score") if "score" in lower else None
         if s1_idx is not None and s2_idx is not None and score_idx is not None:
-            s1 = [row[s1_idx] for row in rows]
-            s2 = [row[s2_idx] for row in rows]
-            scores = [float(row[score_idx]) for row in rows]
+            s1 = []
+            s2 = []
+            scores = []
+            for row in rows:
+                if len(row) <= max(s1_idx, s2_idx, score_idx):
+                    continue
+                s1.append(row[s1_idx])
+                s2.append(row[s2_idx])
+                scores.append(float(row[score_idx]))
             return s1, s2, scores
 
-    s1 = [row[0] for row in rows]
-    s2 = [row[1] for row in rows]
-    scores = [float(row[2]) for row in rows]
+    s1 = []
+    s2 = []
+    scores = []
+    for row in rows:
+        if len(row) < 3:
+            continue
+        s1.append(row[0])
+        s2.append(row[1])
+        scores.append(float(row[2]))
     return s1, s2, scores
 
 
