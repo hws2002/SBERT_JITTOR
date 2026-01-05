@@ -61,10 +61,13 @@ def prepare_nli_dataset(
     split: str,
     tokenizer,
     max_length: int,
-    cache_dir: str,
+    cache_dir: str | None,
     overwrite_cache: bool,
     tokenize_batch_size: int
 ):
+    if cache_dir is None:
+        cache_dir = os.path.join(data_dir, "_cache")
+
     def _map_split(dataset_name: str, requested_split: str) -> str:
         if dataset_name.lower() in {"multinli", "multi_nli", "multi-nli"}:
             if requested_split in {"train", "validation_matched", "validation_mismatched"}:
@@ -136,10 +139,13 @@ def prepare_sts_dataset(
     split: str,
     tokenizer,
     max_length: int,
-    cache_dir: str,
+    cache_dir: str | None,
     overwrite_cache: bool,
     tokenize_batch_size: int
 ):
+    if cache_dir is None:
+        cache_dir = os.path.join(data_dir, "_cache")
+
     data_path = os.path.join(data_dir, dataset_name)
     raw_ds = load_from_disk(data_path)[split]
 
