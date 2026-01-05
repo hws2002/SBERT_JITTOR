@@ -24,9 +24,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from model.sbert_model import SBERTJittor
-from utils.jittor_batch import _to_jittor_batch_single
+from utils.jt_utils import _to_jittor_batch_single
 from utils.training_utils import TrainConfig
-from utils.jittor_utils import setup_device
+from utils.jt_utils import setup_device
 
 logging.basicConfig(
     format="%(asctime)s - %(message)s",

@@ -16,7 +16,7 @@ from jittor.dataset import DataLoader
 from tqdm import tqdm
 
 from utils.data_loader import prepare_sts_dataset, collate_sts
-from utils.jittor_batch import _to_jittor_batch
+from utils.jt_utils import _to_jittor_batch
 from utils.training_utils import safe_model_name
 
 logger = logging.getLogger(__name__)

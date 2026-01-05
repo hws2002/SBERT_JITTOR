@@ -20,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from model.sbert_model import SBERTJittor
 from utils.data_loader import collate_sts, prepare_sts_dataset
-from utils.jittor_batch import _to_jittor_batch
+from utils.jt_utils import _to_jittor_batch
 
 logging.basicConfig(
     format="%(asctime)s - %(message)s",

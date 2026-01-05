@@ -18,8 +18,8 @@ from jittor.dataset import DataLoader
 from model.sbert_model import SBERTJittor
 from losses.regression_loss import RegressionLoss
 from utils.data_loader import prepare_sts_dataset, collate_sts
-from utils.jittor_batch import _to_jittor_batch
-from utils.jittor_utils import setup_device
+from utils.jt_utils import _to_jittor_batch
+from utils.jt_utils import setup_device
 from utils.checkpoint_utils import (
     load_training_checkpoint_with_optimizer as load_training_checkpoint,
     save_checkpoint_with_optimizer as save_checkpoint,
@@ -28,7 +28,7 @@ from utils.training_utils import (
     TrainConfig,
     checkpoint_path,
 )
-from evaluation.sts_eval_utils import evaluate_sts, save_eval_results_single
+from evaluation.sts.sts_eval_utils import evaluate_sts, save_eval_results_single
 
 
 logging.basicConfig(

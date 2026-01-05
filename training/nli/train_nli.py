@@ -19,8 +19,8 @@ from model.sbert_model import SBERTJittor
 from losses.softmax_loss import SoftmaxLoss
 from losses.complex_softmax_loss import ComplexSoftmaxLoss
 from utils.data_loader import prepare_nli_dataset, prepare_sts_dataset, collate_nli, collate_sts
-from utils.jittor_batch import _to_jittor_batch
-from utils.jittor_utils import setup_device
+from utils.jt_utils import _to_jittor_batch
+from utils.jt_utils import setup_device
 from utils.checkpoint_utils import (
     load_training_checkpoint_encoder_only as load_training_checkpoint,
     save_checkpoint_encoder_only as save_checkpoint,
@@ -31,7 +31,7 @@ from utils.training_utils import (
     checkpoint_path,
     safe_model_name,
 )
-from evaluation.sts_eval_utils import evaluate_sts, evaluate_sts_all, save_eval_results_multi
+from evaluation.sts.sts_eval_utils import evaluate_sts, evaluate_sts_all, save_eval_results_multi
 
 # Set the log level to INFO
 logging.basicConfig(
