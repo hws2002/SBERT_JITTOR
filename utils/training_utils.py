@@ -59,9 +59,7 @@ def resolve_tokenizer_source(
     for path in candidates:
         if path and os.path.isdir(path):
             return path
-    raise ValueError(
-        "Expected local model directory for tokenizer (base_model/tokenizer_dir/encoder_checkpoint dir)."
-    )
+    return base_model
 
 
 def checkpoint_path(output_dir: str | Path, base_model: str, tag: str = "best") -> Path:
