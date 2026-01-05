@@ -5,6 +5,7 @@ Inspired by: https://github.com/UKPLab/sentence-transformers/blob/master/example
 """
 
 import argparse
+import math
 import logging
 import os
 import sys
@@ -93,7 +94,9 @@ def train(args):
         collate_batch=collate_nli
     )
 
-    total_steps = args.epochs * len(train_dataloader)
+    num_samples = len(train_dataset)
+    steps_per_epoch = math.ceil(num_samples / args.batch_size)
+    total_steps = steps_per_epoch * args.epochs
     if total_steps == 0:
         raise RuntimeError("No training data found. Check data_dir/datasets arguments.")
     logger.info(f"Total training steps: {total_steps}")
@@ -169,7 +172,7 @@ def train(args):
     train_loss.train()
 
     for epoch in range(start_epoch, args.epochs):
-        epoch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
+        epoch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs}", total=steps_per_epoch)
 
         for step, batch in enumerate(epoch_iterator, 1):
             jt_batch = _to_jittor_batch(batch, for_sts=False)

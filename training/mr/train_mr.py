@@ -5,6 +5,7 @@ Mirrors train_nli_gpu.py style (full fine-tuning, warmup, eval, best checkpoint)
 """
 
 import argparse
+import math
 import logging
 import sys
 import time
@@ -154,7 +155,9 @@ def train(args):
         collate_batch=collate_mr,
     )
 
-    total_steps = args.epochs * len(train_loader)
+    num_samples = len(train_dataset)
+    steps_per_epoch = math.ceil(num_samples / args.batch_size)
+    total_steps = steps_per_epoch * args.epochs
     if total_steps == 0:
         raise RuntimeError("No training data found. Check data_dir arguments.")
     logger.info(f"Total training steps: {total_steps}")
