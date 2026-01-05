@@ -23,6 +23,8 @@ def setup_device(use_cuda: bool) -> None:
 
 
 def _jt_array(data, dtype: str) -> jt.Var:
+    if isinstance(data, jt.Var):
+        return data if str(data.dtype) == dtype else data.astype(dtype)
     return jt.array(np.asarray(data, dtype=dtype))
 
 
