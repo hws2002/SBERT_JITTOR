@@ -1,24 +1,26 @@
 """
-Evaluate a trained SBERT checkpoint on STS-style datasets.
+Evaluate BERT bi-encoder on STS datasets (cosine similarity).
 """
 
 import argparse
+import json
 import logging
+import os
 import sys
+import time
 from pathlib import Path
-from typing import Dict, Iterable, List
-
 import numpy as np
 import jittor as jt
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from model.sbert_model import SBERTWithClassification
+from model.sbert_model import SBERTJittor
 from utils.data_loader import collate_sts, prepare_sts_dataset
+from utils.jt_utils import _to_jittor_batch
 
 logging.basicConfig(
     format="%(asctime)s - %(message)s",
@@ -27,7 +29,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-
 
 DATASET_MAP = {
     "sts12": "STS-12",
@@ -39,29 +40,23 @@ DATASET_MAP = {
     "sick-r": "SICKR",
 }
 
-
-def _jt_array(data, dtype: str):
-    return jt.array(np.asarray(data, dtype=dtype))
-
-
-def _to_jittor_batch(batch: Dict[str, Iterable]) -> Dict[str, jt.Var]:
-    out: Dict[str, jt.Var] = {
-        "input_ids_a": _jt_array(batch["input_ids_a"], "int32"),
-        "attention_mask_a": _jt_array(batch["attention_mask_a"], "float32"),
-        "input_ids_b": _jt_array(batch["input_ids_b"], "int32"),
-        "attention_mask_b": _jt_array(batch["attention_mask_b"], "float32"),
-        "scores": _jt_array(batch["scores"], "float32"),
-    }
-
-    if "token_type_ids_a" in batch:
-        out["token_type_ids_a"] = _jt_array(batch["token_type_ids_a"], "int32")
-    if "token_type_ids_b" in batch:
-        out["token_type_ids_b"] = _jt_array(batch["token_type_ids_b"], "int32")
-
-    return out
+MODEL_DIR_MAP = {
+    "bert-large-uncased": "hf_bert_large",
+    "bert-base-uncased": "hf_bert_base",
+}
 
 
-def evaluate_dataset(
+def _resolve_model_dir(base_model: str, model_root: str) -> str:
+    if os.path.isdir(base_model):
+        return base_model
+    mapped = MODEL_DIR_MAP.get(base_model, base_model)
+    candidate = os.path.join(model_root, mapped)
+    if os.path.isdir(candidate):
+        return candidate
+    return base_model
+
+
+def evaluate_bi_encoder(
     model,
     tokenizer,
     data_dir: str,
@@ -74,9 +69,9 @@ def evaluate_dataset(
     batch_size: int,
     num_workers: int,
 ):
-    import numpy as np
     from scipy.stats import pearsonr, spearmanr
 
+    start_time = time.time()
     sts_dataset = prepare_sts_dataset(
         data_dir=data_dir,
         dataset_name=dataset_name,
@@ -101,7 +96,7 @@ def evaluate_dataset(
     model.eval()
     with jt.no_grad():
         for batch in dataloader:
-            jt_batch = _to_jittor_batch(batch)
+            jt_batch = _to_jittor_batch(batch, for_sts=True)
             emb_a = model.encode(
                 jt_batch["input_ids_a"],
                 jt_batch["attention_mask_a"],
@@ -124,26 +119,30 @@ def evaluate_dataset(
     pearson_corr, _ = pearsonr(all_predictions, all_scores)
     spearman_corr, _ = spearmanr(all_predictions, all_scores)
 
+    elapsed = time.time() - start_time
     return {
         "pearson": pearson_corr * 100,
         "spearman": spearman_corr * 100,
+        "n_samples": len(sts_dataset),
+        "eval_time": elapsed,
     }
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Evaluate a trained SBERT checkpoint on STS datasets",
+        description="Evaluate BERT bi-encoder on STS datasets",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--checkpoint_path", type=str, required=True,
-                        help="Path to a saved Jittor checkpoint (.pkl)")
     parser.add_argument("--base_model", type=str, default="bert-base-uncased",
+                        choices=["bert-base-uncased", "bert-large-uncased"],
                         help="Base encoder model name")
+    parser.add_argument("--model_root", type=str, default="./hf",
+                        help="Root directory containing local models/tokenizers")
+    parser.add_argument("--encoder_checkpoint", type=str, default=None,
+                        help="Optional pretrained encoder checkpoint (.bin/.pt)")
     parser.add_argument("--pooling", type=str, default="mean",
-                        choices=["mean", "cls", "max"],
+                        choices=["mean", "cls"],
                         help="Pooling strategy")
-    parser.add_argument("--num_labels", type=int, default=3,
-                        help="Number of NLI classification labels")
 
     parser.add_argument("--data_dir", type=str, default="./data",
                         help="Directory containing datasets")
@@ -162,18 +161,18 @@ def parse_args():
     parser.add_argument("--use_cuda", action="store_true",
                         help="Use CUDA if available")
 
-    # Evaluation dataset selection
     parser.add_argument(
         "--datasets",
         type=str,
         nargs="+",
-        default=["all"],
+        default=["stsb"],
         choices=["all", "sts12", "sts13", "sts14", "sts15", "sts16", "stsb", "sick-r"],
-        help="Datasets to evaluate (default: all)",
+        help="Datasets to evaluate (default: stsb)",
     )
     parser.add_argument("--split", type=str, default="test",
                         help="Split to evaluate (STS-B supports validation/test)")
-
+    parser.add_argument("--output_json", type=str, default=None,
+                        help="Path to write JSON results (default: ./result/eval_bert_bi_<timestamp>.json)")
     return parser.parse_args()
 
 
@@ -187,18 +186,16 @@ def main():
         jt.flags.use_cuda = 0
         logger.info("Using CPU")
 
-    logger.info("Loading tokenizer (online)...")
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
+    model_dir = _resolve_model_dir(args.base_model, args.model_root)
+    logger.info(f"Loading tokenizer from: {model_dir}")
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
 
-    logger.info("Loading checkpoint...")
-    checkpoint = jt.load(args.checkpoint_path)
-    model = SBERTWithClassification(
+    model = SBERTJittor(
         encoder_name=args.base_model,
         pooling=args.pooling,
-        num_labels=args.num_labels,
-        checkpoint_path=None,
+        head_type="none",
+        checkpoint_path=args.encoder_checkpoint,
     )
-    model.load_state_dict(checkpoint["model_state"])
 
     dataset_keys = args.datasets
     if "all" in dataset_keys:
@@ -212,8 +209,8 @@ def main():
             split = "test"
 
         logger.info(f"Evaluating {dataset_name} ({split})...")
-        scores = evaluate_dataset(
-            model=model.sbert,
+        scores = evaluate_bi_encoder(
+            model=model,
             tokenizer=tokenizer,
             data_dir=args.data_dir,
             dataset_name=dataset_name,
@@ -230,7 +227,53 @@ def main():
             f"{dataset_name} - Pearson: {scores['pearson']:.2f}, Spearman: {scores['spearman']:.2f}"
         )
 
-    logger.info("Evaluation complete.")
+    avg_pearson = sum(v["pearson"] for v in results.values()) / max(len(results), 1)
+    avg_spearman = sum(v["spearman"] for v in results.values()) / max(len(results), 1)
+
+    payload = {
+        "model_info": {
+            "mode": "bi",
+            "model_name": args.base_model,
+            "pooling": args.pooling,
+            "max_length": args.max_length,
+        },
+        "evaluation": {
+            "split": args.split,
+            "batch_size": args.batch_size,
+            "device": "cuda" if jt.flags.use_cuda else "cpu",
+        },
+        "results": [
+            {
+                "dataset": name.lower().replace("sts-", "sts").replace("-b", "b"),
+                "split": args.split if name == "STS-B" else "test",
+                "pearson": scores["pearson"],
+                "spearman": scores["spearman"],
+                "n_samples": scores["n_samples"],
+                "eval_time": scores["eval_time"],
+            }
+            for name, scores in results.items()
+        ],
+        "average": {
+            "pearson": avg_pearson,
+            "spearman": avg_spearman,
+            "n_datasets": len(results),
+        },
+        "timestamp": time.strftime("%Y%m%d_%H%M%S"),
+    }
+
+    output_path = args.output_json
+    if output_path is None:
+        output_dir = Path("./result")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"eval_bert_bi_{payload['timestamp']}.json"
+    else:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=True, indent=2)
+
+    logger.info(f"Evaluation complete. Results saved to {output_path}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,12 @@
+checkpoints
+hf
+data
+
 data/
+important_checkpoints/
+
+training_data/
+
 checkpoints/
 wandb/
 
@@ -11,5 +19,9 @@ wheels/
 
 output/
 hf/
-
 debug/
+result/
+
+test.py
+
+torun.sh

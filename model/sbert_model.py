@@ -4,10 +4,11 @@ SBERT (Sentence-BERT) Implementation in Jittor
 Modular architecture inspired by sentence-transformers:
 - Encoder: BertModel or other transformer models
 - Pooling: mean, cls, max pooling strategies
-- Head: optional projection heads (none, linear, mlp, classification)
+- Head: optional projection heads (none, linear, mlp)
 """
 
-from typing import Dict, Optional, Literal
+from typing import Dict, Optional, Literal, Tuple, Union
+import os
 import jittor as jt
 from jittor import nn
 
@@ -17,17 +18,20 @@ try:
 except ImportError:
     from bert_model import BertConfig, BertModel
 
-# Import heads
 try:
-    from ..heads import IdentityHead, LinearHead, MLPHead, ClassificationHead
+    from ..heads import IdentityHead, LinearHead, MLPHead
 except ImportError:
     import sys
     from pathlib import Path
-    # Add parent directory to path for standalone execution
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from heads import IdentityHead, LinearHead, MLPHead, ClassificationHead
+    from heads import IdentityHead, LinearHead, MLPHead
 
 from jittor_utils.load_pytorch import load_pytorch
+
+MODEL_REGISTRY = {
+    # Example:
+    # "roberta-base-nli-mean": "/path/to/roberta-base-nli-mean.pkl",
+}
 
 
 # ============================================================================
@@ -81,7 +85,10 @@ class Pooling(nn.Module):
                 token_embeddings,
                 jt.array(-1e9)
             )
-            return jt.max(masked_embeddings, dim=1)[0]
+            pooled = jt.max(masked_embeddings, dim=1)[0]
+            if pooled.ndim == 1:
+                pooled = pooled.unsqueeze(0)
+            return pooled
 
         else:
             raise ValueError(f"Unknown pooling mode: {self.pooling_mode}")
@@ -121,6 +128,12 @@ class SBERTJittor(nn.Module):
         output_dim: Optional[int] = None,
         config: Optional[BertConfig] = None,
         checkpoint_path: Optional[str] = None,
+        pretrained: bool = False,
+        model_id: Optional[str] = None,
+        checkpoint_name: Optional[str] = None,
+        local_dir: Optional[str] = None,
+        registry: Optional[Dict[str, str]] = None,
+        use_checkpoint_pooling: bool = True,
         **head_kwargs
     ):
         """
@@ -135,6 +148,23 @@ class SBERTJittor(nn.Module):
         """
         super().__init__()
 
+        repo_dir = None
+        payload = None
+        if pretrained:
+            resolved_id = model_id or encoder_name
+            if checkpoint_path is None:
+                checkpoint_path, repo_dir = self._resolve_pretrained_checkpoint(
+                    resolved_id,
+                    checkpoint_name=checkpoint_name,
+                    local_dir=local_dir,
+                    registry=registry,
+                )
+            payload = self._load_jittor_checkpoint(checkpoint_path)
+            if payload is not None:
+                encoder_name = payload.get("base_model", encoder_name)
+                if use_checkpoint_pooling:
+                    pooling = payload.get("pooling", pooling)
+
         self.encoder_name = encoder_name
         self.pooling_mode = pooling
         self.head_type = head_type
@@ -145,7 +175,7 @@ class SBERTJittor(nn.Module):
         self.config = config
 
         # 1. Encoder module
-        # Disable BertPooler since SBERT uses its own pooling module.
+        #  Disable BertPooler since SBERT uses its own pooling module.
         self.encoder = BertModel(config, add_pooling_layer=False)
 
         # 2. Pooling module
@@ -156,7 +186,12 @@ class SBERTJittor(nn.Module):
         self.head = self._build_head(head_type, hidden_size, output_dim, **head_kwargs)
 
         # Load checkpoint if provided
-        if checkpoint_path:
+        if pretrained:
+            if payload is not None:
+                self.load_state_dict(payload["model_state"])
+            elif checkpoint_path:
+                self.load_checkpoint(checkpoint_path)
+        elif checkpoint_path:
             self.load_checkpoint(checkpoint_path)
 
         print(f"SBERTJittor initialized:")
@@ -164,6 +199,129 @@ class SBERTJittor(nn.Module):
         print(f"  Pooling: {pooling}")
         print(f"  Head: {head_type}")
         print(f"  Output dim: {self.output_dim}")
+
+    @staticmethod
+    def _resolve_checkpoint_path(repo_dir: str, checkpoint_name: Optional[str]) -> str:
+        if checkpoint_name:
+            candidate = os.path.join(repo_dir, checkpoint_name)
+            if not os.path.isfile(candidate):
+                raise FileNotFoundError(f"Checkpoint not found: {candidate}")
+            return candidate
+
+        for name in os.listdir(repo_dir):
+            if name.endswith(".pkl"):
+                return os.path.join(repo_dir, name)
+        raise FileNotFoundError(f"No .pkl checkpoint found in {repo_dir}")
+
+    @classmethod
+    def _resolve_pretrained_checkpoint(
+        cls,
+        model_id: str,
+        *,
+        checkpoint_name: Optional[str] = None,
+        local_dir: Optional[str] = None,
+        registry: Optional[Dict[str, str]] = None,
+    ) -> Tuple[str, Optional[str]]:
+        if os.path.isfile(model_id):
+            return model_id, os.path.dirname(model_id)
+        if os.path.isdir(model_id):
+            return cls._resolve_checkpoint_path(model_id, checkpoint_name), model_id
+
+        lookup = registry if registry is not None else MODEL_REGISTRY
+        if model_id in lookup:
+            checkpoint_path = lookup[model_id]
+            return checkpoint_path, os.path.dirname(checkpoint_path)
+
+        from huggingface_hub import snapshot_download
+
+        repo_dir = snapshot_download(repo_id=model_id, local_dir=local_dir)
+        checkpoint_path = cls._resolve_checkpoint_path(repo_dir, checkpoint_name)
+        return checkpoint_path, repo_dir
+
+    @staticmethod
+    def _load_jittor_checkpoint(checkpoint_path: str) -> Optional[dict]:
+        try:
+            payload = jt.load(checkpoint_path)
+        except Exception:
+            return None
+        if isinstance(payload, dict) and "model_state" in payload:
+            return payload
+        return None
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_id: str,
+        *,
+        checkpoint_name: Optional[str] = None,
+        local_dir: Optional[str] = None,
+        registry: Optional[Dict[str, str]] = None,
+        pooling: Optional[Literal['mean', 'cls', 'max']] = None,
+        head_type: Literal['none', 'linear', 'mlp'] = 'none',
+        output_dim: Optional[int] = None,
+        return_tokenizer: bool = False,
+        **head_kwargs,
+    ) -> Union['SBERTJittor', Tuple['SBERTJittor', 'AutoTokenizer', str]]:
+        """
+        Load a Jittor SBERT checkpoint from a local path/dir or Hugging Face repo.
+
+        Returns the model only by default. Use return_tokenizer=True to also
+        get (model, tokenizer, repo_dir).
+        """
+        repo_dir = None
+        checkpoint_path = None
+
+        if os.path.isfile(model_id):
+            checkpoint_path = model_id
+            repo_dir = os.path.dirname(model_id)
+        elif os.path.isdir(model_id):
+            repo_dir = model_id
+            checkpoint_path = cls._resolve_checkpoint_path(repo_dir, checkpoint_name)
+        else:
+            lookup = registry if registry is not None else MODEL_REGISTRY
+            if model_id in lookup:
+                checkpoint_path = lookup[model_id]
+                repo_dir = os.path.dirname(checkpoint_path)
+            else:
+                from huggingface_hub import snapshot_download
+
+                repo_dir = snapshot_download(repo_id=model_id, local_dir=local_dir)
+                checkpoint_path = cls._resolve_checkpoint_path(repo_dir, checkpoint_name)
+
+        payload = cls._load_jittor_checkpoint(checkpoint_path)
+        base_model = model_id
+
+        if payload is not None:
+            base_model = payload.get('base_model', base_model)
+            use_pooling = pooling or payload.get('pooling', 'mean')
+            model = cls(
+                encoder_name=base_model,
+                pooling=use_pooling,
+                head_type=head_type,
+                output_dim=output_dim,
+                checkpoint_path=None,
+                **head_kwargs,
+            )
+            model.load_state_dict(payload['model_state'])
+        else:
+            use_pooling = pooling or 'mean'
+            model = cls(
+                encoder_name=repo_dir or base_model,
+                pooling=use_pooling,
+                head_type=head_type,
+                output_dim=output_dim,
+                checkpoint_path=checkpoint_path,
+                **head_kwargs,
+            )
+
+        if return_tokenizer:
+            from transformers import AutoTokenizer
+
+            tokenizer_source = repo_dir or base_model
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
+            return model, tokenizer, repo_dir or os.path.dirname(checkpoint_path)
+
+        return model
 
     @property
     def output_dim(self) -> int:
@@ -189,6 +347,9 @@ class SBERTJittor(nn.Module):
                     max_position_embeddings=514,  # RoBERTa uses 514
                     type_vocab_size=1,  # RoBERTa doesn't use token type IDs
                     initializer_range=0.02,
+                    layer_norm_eps=1e-5,
+                    pad_token_id=1,
+                    use_token_type_embeddings=False,
                 )
             elif 'large' in encoder_lower:
                 return BertConfig(
@@ -202,6 +363,9 @@ class SBERTJittor(nn.Module):
                     max_position_embeddings=514,
                     type_vocab_size=1,
                     initializer_range=0.02,
+                    layer_norm_eps=1e-5,
+                    pad_token_id=1,
+                    use_token_type_embeddings=False,
                 )
 
         # BERT models
@@ -316,7 +480,16 @@ class SBERTJittor(nn.Module):
         """Load encoder weights from PyTorch checkpoint"""
         print(f"Loading checkpoint from {checkpoint_path}")
         state_dict = load_pytorch(checkpoint_path)
-        self.encoder.load_state_dict(state_dict)
+        state_dict = _remap_hf_encoder_state(state_dict)
+        encoder_keys = set(self.encoder.state_dict().keys())
+        filtered = {k: v for k, v in state_dict.items() if k in encoder_keys}
+        missing = encoder_keys.difference(filtered.keys())
+        unexpected = set(state_dict.keys()).difference(encoder_keys)
+        if unexpected:
+            print(f"Warning: {len(unexpected)} unexpected keys ignored when loading encoder.")
+        if missing:
+            print(f"Warning: {len(missing)} encoder keys not found in checkpoint.")
+        self.encoder.load_state_dict(filtered)
         print("Checkpoint loaded successfully")
 
     def save(self, save_path: str):
@@ -339,135 +512,28 @@ class SBERTJittor(nn.Module):
         print(f"Model loaded from {load_path}")
 
 
-# ============================================================================
-# SBERT with Classification Head (for NLI training)
-# ============================================================================
 
-class SBERTWithClassification(nn.Module):
-    """
-    SBERT with classification head for NLI training.
+def _remap_hf_encoder_state(state_dict: dict) -> dict:
+    if not isinstance(state_dict, dict):
+        return state_dict
 
-    Uses two sentence encodings and concatenates them with element-wise difference
-    for 3-way classification (entailment, neutral, contradiction).
-    """
+    has_roberta = any(key.startswith("roberta.") for key in state_dict)
+    if not has_roberta:
+        return state_dict
 
-    def __init__(
-        self,
-        encoder_name: str = 'bert-base-uncased',
-        pooling: str = 'mean',
-        num_labels: int = 3,
-        config: Optional[BertConfig] = None,
-        checkpoint_path: Optional[str] = None
-    ):
-        super().__init__()
+    remapped = {}
+    for key, value in state_dict.items():
+        if key.startswith("roberta."):
+            new_key = key[len("roberta."):]
+        elif key.startswith("bert."):
+            new_key = key[len("bert."):]
+        else:
+            new_key = key
 
-        # SBERT encoder (no projection head for NLI training)
-        self.sbert = SBERTJittor(
-            encoder_name=encoder_name,
-            pooling=pooling,
-            head_type='none',
-            config=config,
-            checkpoint_path=checkpoint_path
-        )
-
-        # Classification head: [u, v, |u-v|] -> logits
-        self.classifier = ClassificationHead(
-            hidden_size=self.sbert.output_dim,
-            num_labels=num_labels
-        )
-
-        self.num_labels = num_labels
-
-    def encode(
-        self,
-        input_ids: jt.Var,
-        attention_mask: jt.Var,
-        token_type_ids: Optional[jt.Var] = None
-    ) -> jt.Var:
-        """Encode sentences (delegates to SBERT)"""
-        return self.sbert.encode(input_ids, attention_mask, token_type_ids)
-
-    def execute(self, batch: Dict[str, jt.Var]) -> jt.Var:
-        """
-        Forward pass for NLI classification.
-
-        Args:
-            batch: Dictionary containing:
-                - 'input_ids_a', 'attention_mask_a': First sentence
-                - 'input_ids_b', 'attention_mask_b': Second sentence
-                - 'token_type_ids_a', 'token_type_ids_b': (optional)
-
-        Returns:
-            logits: [batch_size, num_labels]
-        """
-        # Encode both sentences
-        emb_a = self.encode(
-            batch['input_ids_a'],
-            batch['attention_mask_a'],
-            batch.get('token_type_ids_a', None)
-        )
-        emb_b = self.encode(
-            batch['input_ids_b'],
-            batch['attention_mask_b'],
-            batch.get('token_type_ids_b', None)
-        )
-
-        # Use classification head
-        logits = self.classifier(emb_a, emb_b)
-
-        return logits
-
-    def load_checkpoint(self, checkpoint_path: str):
-        """Load encoder checkpoint (delegates to SBERT)"""
-        self.sbert.load_checkpoint(checkpoint_path)
-
-
-# ============================================================================
-# Helper function for creating models
-# ============================================================================
-
-def create_sbert_model(
-    encoder_name: str = 'bert-base-uncased',
-    pooling: str = 'mean',
-    head_type: str = 'none',
-    output_dim: Optional[int] = None,
-    checkpoint_path: Optional[str] = None,
-    for_training: bool = False,
-    num_labels: int = 3,
-    **kwargs
-) -> nn.Module:
-    """
-    Factory function to create SBERT models.
-
-    Args:
-        encoder_name: Encoder model name
-        pooling: Pooling strategy
-        head_type: Projection head type
-        output_dim: Output dimension for projection
-        checkpoint_path: Path to pretrained weights
-        for_training: If True, return SBERTWithClassification
-        num_labels: Number of labels for classification
-        **kwargs: Additional arguments for head
-
-    Returns:
-        SBERT model (either SBERTJittor or SBERTWithClassification)
-    """
-    if for_training:
-        return SBERTWithClassification(
-            encoder_name=encoder_name,
-            pooling=pooling,
-            num_labels=num_labels,
-            checkpoint_path=checkpoint_path
-        )
-    else:
-        return SBERTJittor(
-            encoder_name=encoder_name,
-            pooling=pooling,
-            head_type=head_type,
-            output_dim=output_dim,
-            checkpoint_path=checkpoint_path,
-            **kwargs
-        )
+        if new_key.startswith(("lm_head.", "cls.", "classifier.")):
+            continue
+        remapped[new_key] = value
+    return remapped
 
 
 if __name__ == "__main__":
@@ -497,18 +563,6 @@ if __name__ == "__main__":
     print("\n4. SBERT with MLP projection head")
     model4 = SBERTJittor('bert-base-uncased', pooling='mean', head_type='mlp', output_dim=128, num_layers=2)
     print(f"Output dim: {model4.output_dim}")
-
-    # 5. SBERT for training (with classification head)
-    print("\n5. SBERT with classification head (for NLI training)")
-    model5 = SBERTWithClassification('bert-base-uncased', pooling='mean', num_labels=3)
-    print(f"Encoder output dim: {model5.sbert.output_dim}")
-    print(f"Num labels: {model5.num_labels}")
-
-    # 6. RoBERTa for training
-    print("\n6. RoBERTa with classification head (for NLI training)")
-    model6 = SBERTWithClassification('roberta-base', pooling='mean', num_labels=3)
-    print(f"Encoder output dim: {model6.sbert.output_dim}")
-    print(f"Num labels: {model6.num_labels}")
 
     print("\n" + "=" * 70)
     print("All tests completed!")
