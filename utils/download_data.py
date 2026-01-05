@@ -1,157 +1,183 @@
 """
-Dataset download script
-Download SNLI, MultiNLI, STS[12:16], STS Benchmark datasets
+Dataset download script (via Hugging Face datasets) with local TSV/JSONL export.
 """
 
-import os
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Iterable
+
 from datasets import load_dataset
-import pandas as pd
-from tqdm import tqdm
 
 
-def download_nli_datasets(data_dir='./data'):
-    """
-    Download SNLI and MultiNLI Dataset
-    Args:
-        data_dir:
-    """
-    print("=" * 60)
-    print("Downloading NLI Datasets (SNLI + MultiNLI)")
-    print("=" * 60)
-
-    # SNLI Download
-    print("\n[1/2] Downloading SNLI dataset...")
-    snli = load_dataset("stanfordnlp/snli")
-    snli.save_to_disk(os.path.join(data_dir, 'SNLI'))
-    print(f"SNLI saved to {os.path.join(data_dir, 'SNLI')}")
-    print(f"  - Train: {len(snli['train'])} examples")
-    print(f"  - Validation: {len(snli['validation'])} examples")
-    print(f"  - Test: {len(snli['test'])} examples")
-
-    # MultiNLI Download
-    print("\n[2/2] Downloading MultiNLI dataset...")
-    mnli = load_dataset("nyu-mll/multi_nli")
-    mnli.save_to_disk(os.path.join(data_dir, 'MultiNLI'))
-    print(f"MultiNLI saved to {os.path.join(data_dir, 'MultiNLI')}")
-    print(f"  - Train: {len(mnli['train'])} examples")
-    print(f"  - Validation (matched): {len(mnli['validation_matched'])} examples")
-    print(f"  - Validation (mismatched): {len(mnli['validation_mismatched'])} examples")
-
-    total_train = len(snli['train']) + len(mnli['train'])
-    print(f"\n Total training examples: {total_train:,}")
+def _write_jsonl(path: Path, rows: Iterable[dict]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
-def download_sts_benchmark(data_dir='./data'):
-    """
-    Download STS Benchmark dataset
-
-    Args:
-        data_dir:
-    """
-    print("\n" + "=" * 60)
-    print("Downloading STS Benchmark Datasets")
-    print("=" * 60)
-
-    sts_datasets = [
-        'stsb_multi_mt',  # STS-B
-        'sts/sts12-sts',
-        'sts/sts13-sts',
-        'sts/sts14-sts',
-        'sts/sts15-sts',
-        'sts/sts16-sts',
-        'sickr-sts'
-    ]
-
-    # STS-B (Main benchmark)
-    print(f"\n[1/{len(sts_datasets)}] Downloading STS-B dataset...")
-
-    stsb = load_dataset("mteb/stsbenchmark-sts")
-    stsb.save_to_disk(os.path.join(data_dir, 'STS-B'))
-    print(f"STS-benchmark saved to {os.path.join(data_dir,'STS-B')}")
-
-    # STS[12~16]
-    for i in range(12, 17):
-        print(f"\n[{i}/{len(sts_datasets)}] Downloading STS-{i} dataset...")
-        ds_i = load_dataset(f"mteb/sts{i}-sts")
-        ds_i.save_to_disk(os.path.join(data_dir, 'STS-' + str(i)))
-        print(f"STS-{i} saved to {os.path.join(data_dir, 'STS-' + str(i))}")
-    
-    # SICKR
-    print(f"\n[17/{len(sts_datasets)}] Downloading SICKR dataset...")
-    sickr = load_dataset("mteb/sickr-sts")
-    sickr.save_to_disk(os.path.join(data_dir, 'SICKR'))
-    print(f"SICKR saved to {os.path.join(data_dir, 'SICKR')}")
-    print("=" * 60)
+def _write_tsv(path: Path, header: list[str], rows: Iterable[list]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write("\t".join(header) + "\n")
+        for row in rows:
+            handle.write("\t".join(str(x) for x in row) + "\n")
 
 
-def download_sst(data_dir='./data'):
-    """
-    Download Stanford SST-2 dataset.
-    """
-    print("\n" + "=" * 60)
-    print("Downloading SST-2 Dataset")
-    print("=" * 60)
-    sst = load_dataset("stanfordnlp/sst2")
-    sst.save_to_disk(os.path.join(data_dir, 'SST-2'))
-    print(f"SST-2 saved to {os.path.join(data_dir, 'SST-2')}")
-    print(f"  - Train: {len(sst['train'])} examples")
-    print(f"  - Validation: {len(sst['validation'])} examples")
-    print(f"  - Test: {len(sst['test'])} examples")
+def download_snli(data_dir: str):
+    ds = load_dataset("stanfordnlp/snli")
+    out_root = Path(data_dir) / "SNLI"
+
+    split_map = {
+        "train": "snli_1.0_train.jsonl",
+        "validation": "snli_1.0_dev.jsonl",
+        "test": "snli_1.0_test.jsonl",
+    }
+
+    label_map = {0: "entailment", 1: "neutral", 2: "contradiction"}
+    for split, name in split_map.items():
+        rows = []
+        for item in ds[split]:
+            label = item.get("label")
+            if label is None or label == -1:
+                continue
+            rows.append({
+                "sentence1": item.get("premise"),
+                "sentence2": item.get("hypothesis"),
+                "gold_label": label_map.get(int(label), str(label)),
+            })
+        _write_jsonl(out_root / name, rows)
+    print(f"SNLI saved to {out_root}")
 
 
-def download_mr(data_dir='./data'):
-    """
-    Download MR (Movie Review) dataset (Rotten Tomatoes).
-    """
-    print("\n" + "=" * 60)
-    print("Downloading MR (Rotten Tomatoes) Dataset")
-    print("=" * 60)
-    mr = load_dataset("rotten_tomatoes")
-    mr.save_to_disk(os.path.join(data_dir, 'MR'))
-    print(f"MR saved to {os.path.join(data_dir, 'MR')}")
-    print(f"  - Train: {len(mr['train'])} examples")
-    print(f"  - Validation: {len(mr['validation'])} examples")
-    print(f"  - Test: {len(mr['test'])} examples")
+def download_multinli(data_dir: str):
+    ds = load_dataset("nyu-mll/multi_nli")
+    out_root = Path(data_dir) / "MultiNLI"
+
+    split_map = {
+        "train": "multinli_1.0_train.jsonl",
+        "validation_matched": "multinli_1.0_dev_matched.jsonl",
+        "validation_mismatched": "multinli_1.0_dev_mismatched.jsonl",
+    }
+
+    label_map = {0: "entailment", 1: "neutral", 2: "contradiction"}
+    for split, name in split_map.items():
+        rows = []
+        for item in ds[split]:
+            label = item.get("label")
+            if label is None or label == -1:
+                continue
+            rows.append({
+                "sentence1": item.get("premise"),
+                "sentence2": item.get("hypothesis"),
+                "gold_label": label_map.get(int(label), str(label)),
+            })
+        _write_jsonl(out_root / name, rows)
+    print(f"MultiNLI saved to {out_root}")
+
+
+def download_glue(data_dir: str):
+    out_root = Path(data_dir)
+
+    stsb = load_dataset("glue", "stsb")
+    for split in ["train", "validation", "test"]:
+        rows = []
+        for item in stsb[split]:
+            score = item.get("label")
+            if score is None:
+                continue
+            rows.append([item["sentence1"], item["sentence2"], float(score)])
+        name = "dev.tsv" if split == "validation" else f"{split}.tsv"
+        _write_tsv(out_root / "STS-B" / name, ["sentence1", "sentence2", "score"], rows)
+
+    sst = load_dataset("glue", "sst2")
+    for split in ["train", "validation", "test"]:
+        rows = []
+        for item in sst[split]:
+            label = item.get("label", -1)
+            rows.append([item["sentence"], int(label) if label is not None else -1])
+        name = "dev.tsv" if split == "validation" else f"{split}.tsv"
+        _write_tsv(out_root / "SST-2" / name, ["sentence", "label"], rows)
+
+    print(f"GLUE STS-B/SST-2 saved to {out_root}")
+
+
+def _download_sts_dataset(repo_id: str, out_dir: Path):
+    ds = load_dataset(repo_id)
+    split = "test" if "test" in ds else list(ds.keys())[0]
+    rows = []
+    for item in ds[split]:
+        rows.append([item["sentence1"], item["sentence2"], float(item["score"])])
+    _write_tsv(out_dir / "test.tsv", ["sentence1", "sentence2", "score"], rows)
+
+
+def download_sts12_16(data_dir: str):
+    base = Path(data_dir)
+    mapping = {
+        "STS-12": "mteb/sts12-sts",
+        "STS-13": "mteb/sts13-sts",
+        "STS-14": "mteb/sts14-sts",
+        "STS-15": "mteb/sts15-sts",
+        "STS-16": "mteb/sts16-sts",
+    }
+    for name, repo in mapping.items():
+        _download_sts_dataset(repo, base / name)
+    print(f"STS12-16 saved under {base}")
+
+
+def download_sickr(data_dir: str):
+    base = Path(data_dir) / "SICKR"
+    _download_sts_dataset("mteb/sickr-sts", base)
+    print(f"SICKR saved to {base}")
+
+
+def download_mr(data_dir: str):
+    ds = load_dataset("rotten_tomatoes")
+    base = Path(data_dir) / "MR"
+    for split in ["train", "validation", "test"]:
+        rows = []
+        for item in ds[split]:
+            rows.append([item["text"], int(item["label"])])
+        _write_tsv(base / f"{split}.tsv", ["text", "label"], rows)
+    print(f"MR saved to {base}")
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description='Download datasets for SBERT')
-    parser.add_argument('--data_dir', type=str, default='./data',
-                        help='Directory to save datasets')
-    parser.add_argument('--nli_only', action='store_true',
-                        help='Download only NLI datasets')
-    parser.add_argument('--sts_only', action='store_true',
-                        help='Download only STS datasets')
-    parser.add_argument('--sst_only', action='store_true',
-                        help='Download only SST-2 dataset')
-    parser.add_argument('--mr_only', action='store_true',
-                        help='Download only MR dataset')
+    parser = argparse.ArgumentParser(description="Download datasets for SBERT (HF datasets -> local files)")
+    parser.add_argument("--data_dir", type=str, default="./data",
+                        help="Directory to save datasets")
+    parser.add_argument("--nli_only", action="store_true",
+                        help="Download only NLI datasets")
+    parser.add_argument("--sts_only", action="store_true",
+                        help="Download only STS datasets")
+    parser.add_argument("--sst_only", action="store_true",
+                        help="Download only SST-2 dataset")
+    parser.add_argument("--mr_only", action="store_true",
+                        help="Download only MR dataset")
     args = parser.parse_args()
 
-    # make directories
-    os.makedirs(args.data_dir, exist_ok=True)
-    os.makedirs(os.path.join(args.data_dir, 'SNLI'), exist_ok=True)
-    os.makedirs(os.path.join(args.data_dir, 'MultiNLI'), exist_ok=True)
-    os.makedirs(os.path.join(args.data_dir, 'STS-Benchmark'), exist_ok=True)
-
-    # download
-    if not (args.sts_only or args.sst_only or args.mr_only):
-        download_nli_datasets(args.data_dir)
-
-    if not args.nli_only and not args.sst_only and not args.mr_only:
-        download_sts_benchmark(args.data_dir)
-
-    if args.sst_only:
-        download_sst(args.data_dir)
-    elif not args.nli_only and not args.mr_only:
-        download_sst(args.data_dir)
-    if args.mr_only:
+    only_flags = [args.nli_only, args.sts_only, args.sst_only, args.mr_only]
+    if any(only_flags):
+        if args.nli_only:
+            download_snli(args.data_dir)
+            download_multinli(args.data_dir)
+        if args.sts_only:
+            download_glue(args.data_dir)
+            download_sts12_16(args.data_dir)
+            download_sickr(args.data_dir)
+        if args.sst_only:
+            download_glue(args.data_dir)
+        if args.mr_only:
+            download_mr(args.data_dir)
+    else:
+        download_snli(args.data_dir)
+        download_multinli(args.data_dir)
+        download_glue(args.data_dir)
+        download_sts12_16(args.data_dir)
+        download_sickr(args.data_dir)
         download_mr(args.data_dir)
-    elif not args.nli_only and not args.sst_only:
-        download_mr(args.data_dir)
 
-    print("\n" + "=" * 60)
     print("Done!")
-    print("=" * 60)

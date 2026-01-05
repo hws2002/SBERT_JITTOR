@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 import numpy as np
 import jittor as jt
-from torch.utils.data import DataLoader
+from jittor.dataset import DataLoader
 from transformers import AutoTokenizer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

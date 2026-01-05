@@ -15,9 +15,8 @@ from typing import Dict, Iterable, List
 
 import numpy as np
 import jittor as jt
-from torch.utils.data import DataLoader
+from jittor.dataset import DataLoader
 from transformers import AutoTokenizer
-from datasets import load_from_disk
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -62,6 +61,57 @@ def _cache_path(cache_dir: str, dataset_name: str, split: str, model_name: str, 
     name = f"{dataset_name}_{split}_{model_id}_len{max_length}"
     return os.path.join(cache_dir, name)
 
+
+def _resolve_sts_file(data_dir: str, dataset_name: str, split: str) -> str:
+    root = os.path.join(data_dir, dataset_name)
+    if dataset_name.upper() == "STS-B":
+        if split == "validation":
+            return os.path.join(root, "dev.tsv")
+        if split == "test":
+            return os.path.join(root, "test.tsv")
+        return os.path.join(root, "train.tsv")
+    if dataset_name.upper().startswith("STS-"):
+        return os.path.join(root, f"{split}.tsv")
+    if dataset_name.upper() in {"SICKR", "SICK-R"}:
+        return os.path.join(root, f"{split}.tsv")
+    return os.path.join(root, f"{split}.tsv")
+
+
+def _load_sts_pairs_local(data_dir: str, dataset_name: str, split: str):
+    path = _resolve_sts_file(data_dir, dataset_name, split)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Missing STS file: {path}")
+    with open(path, "r", encoding="utf-8") as handle:
+        lines = [line.rstrip("\n") for line in handle if line.strip()]
+    if not lines:
+        return [], [], np.asarray([], dtype=np.float32)
+    header = lines[0].split("\t")
+    has_header = any("sentence" in col.lower() or "score" in col.lower() for col in header)
+    rows = lines[1:] if has_header else lines
+    s1 = []
+    s2 = []
+    scores = []
+    if has_header:
+        lower = [h.lower() for h in header]
+        s1_idx = lower.index("sentence1") if "sentence1" in lower else 0
+        s2_idx = lower.index("sentence2") if "sentence2" in lower else 1
+        score_idx = lower.index("score") if "score" in lower else 2
+        for row in rows:
+            parts = row.split("\t")
+            if len(parts) <= max(s1_idx, s2_idx, score_idx):
+                continue
+            s1.append(parts[s1_idx])
+            s2.append(parts[s2_idx])
+            scores.append(float(parts[score_idx]))
+    else:
+        for row in rows:
+            parts = row.split("\t")
+            if len(parts) < 3:
+                continue
+            s1.append(parts[0])
+            s2.append(parts[1])
+            scores.append(float(parts[2]))
+    return s1, s2, np.asarray(scores, dtype=np.float32)
 
 def evaluate_dataset(
     model,
@@ -152,10 +202,7 @@ def evaluate_dataset_torch(
     from scipy.stats import pearsonr, spearmanr
 
     start_time = time.time()
-    raw_ds = load_from_disk(os.path.join(data_dir, dataset_name))[split]
-    sentences1 = raw_ds["sentence1"]
-    sentences2 = raw_ds["sentence2"]
-    scores = np.asarray(raw_ds["score"], dtype=np.float32)
+    sentences1, sentences2, scores = _load_sts_pairs_local(data_dir, dataset_name, split)
 
     emb_a = model.encode(sentences1, batch_size=batch_size, show_progress_bar=False)
     emb_b = model.encode(sentences2, batch_size=batch_size, show_progress_bar=False)
@@ -170,7 +217,7 @@ def evaluate_dataset_torch(
     return {
         "pearson": pearson_corr * 100,
         "spearman": spearman_corr * 100,
-        "n_samples": len(raw_ds),
+        "n_samples": len(scores),
         "eval_time": elapsed,
     }
 

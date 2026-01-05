@@ -51,6 +51,31 @@ python training/mr/train_mr.py bert-base-uncased --data_dir ./data --pooling mea
 python training/sst/train_sst.py bert-base-uncased --data_dir ./data --pooling mean --use_cuda
 ```
 
+### Local dataset layout
+
+Place raw datasets under `./data` (no Hugging Face datasets dependency):
+
+```
+data/
+  SNLI/snli_1.0_{train,dev,test}.jsonl
+  MultiNLI/multinli_1.0_{train,dev_matched,dev_mismatched}.jsonl
+  STS-B/{train,dev,test}.tsv
+  STS-12/test.tsv
+  STS-13/test.tsv
+  STS-14/test.tsv
+  STS-15/test.tsv
+  STS-16/test.tsv
+  SICKR/test.tsv
+  MR/{train,validation,test}.tsv
+  SST-2/{train,dev,test}.tsv
+```
+
+Use the downloader to fetch via Hugging Face datasets and export to local files:
+
+```bash
+python utils/download_data.py --data_dir ./data
+```
+
 ## Evaluation command
 
 Evaluate a Jittor SBERT checkpoint on STS benchmarks:

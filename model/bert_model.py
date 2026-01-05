@@ -1,5 +1,3 @@
-#!/usr/bin/python
-# -*- coding: UTF-8 -*-
 import jittor
 from jittor import nn
 from jittor.nn import CrossEntropyLoss

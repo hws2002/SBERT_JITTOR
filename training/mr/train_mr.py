@@ -5,9 +5,7 @@ Mirrors train_nli_gpu.py style (full fine-tuning, warmup, eval, best checkpoint)
 """
 
 import argparse
-import json
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -16,7 +14,7 @@ from typing import Dict, Iterable, List
 import numpy as np
 import jittor as jt
 from jittor import nn
-from torch.utils.data import DataLoader
+from jittor.dataset import DataLoader
 from transformers import AutoTokenizer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from model.sbert_model import SBERTJittor
 from utils.jt_utils import _to_jittor_batch_single
+from utils.data_loader import prepare_text_classification_dataset
 from utils.training_utils import TrainConfig
 from utils.jt_utils import setup_device
 
@@ -36,14 +35,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-
-def _cache_path(cache_dir: str, split: str, model_name: str, max_length: int) -> str:
-    model_id = Path(model_name).name.replace("/", "_")
-    name = f"MR_{split}_{model_id}_len{max_length}"
-    return os.path.join(cache_dir, name)
-
-
 def prepare_mr_dataset(
     data_dir: str,
     split: str,
@@ -53,36 +44,16 @@ def prepare_mr_dataset(
     overwrite_cache: bool,
     tokenize_batch_size: int,
 ):
-    from datasets import load_from_disk
-
-    data_path = os.path.join(data_dir, "MR")
-    raw_ds = load_from_disk(data_path)[split]
-
-    cache_path = _cache_path(cache_dir, split, tokenizer.name_or_path, max_length)
-    if os.path.isdir(cache_path) and not overwrite_cache:
-        logger.info(f"Loading cached MR dataset: {cache_path}")
-        return load_from_disk(cache_path)
-
-    def tokenize_fn(batch):
-        tok = tokenizer(
-            batch["text"],
-            padding="max_length",
-            truncation=True,
-            max_length=max_length,
-        )
-        tok["labels"] = batch["label"]
-        return tok
-
-    tokenized = raw_ds.map(
-        tokenize_fn,
-        batched=True,
-        batch_size=tokenize_batch_size,
-        remove_columns=raw_ds.column_names,
-        desc=f"Tokenizing MR/{split}",
+    return prepare_text_classification_dataset(
+        data_dir=data_dir,
+        dataset_name="MR",
+        split=split,
+        tokenizer=tokenizer,
+        max_length=max_length,
+        cache_dir=cache_dir,
+        overwrite_cache=overwrite_cache,
+        tokenize_batch_size=tokenize_batch_size,
     )
-    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-    tokenized.save_to_disk(cache_path)
-    return tokenized
 
 
 def collate_mr(batch: List[Dict]) -> Dict[str, np.ndarray]:
