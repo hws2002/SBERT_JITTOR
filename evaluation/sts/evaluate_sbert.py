@@ -295,11 +295,6 @@ def main():
             candidate = os.path.join(args.encoder_checkpoint_path, mapped)
             if os.path.isdir(candidate):
                 tokenizer_source = candidate
-        if not os.path.isdir(tokenizer_source):
-            raise ValueError(
-                "Tokenizer not found locally. Provide a local base_model directory "
-                "or place it under --encoder_checkpoint_path."
-            )
         logger.info(f"Loading tokenizer from: {tokenizer_source}")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
 
