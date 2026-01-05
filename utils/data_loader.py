@@ -328,7 +328,11 @@ def _parse_sts_rows(header: List[str], rows: List[List[str]]) -> Tuple[List[str]
         lower = [h.lower() for h in header]
         s1_idx = lower.index("sentence1") if "sentence1" in lower else None
         s2_idx = lower.index("sentence2") if "sentence2" in lower else None
-        score_idx = lower.index("score") if "score" in lower else None
+        score_idx = None
+        if "score" in lower:
+            score_idx = lower.index("score")
+        elif "label" in lower:
+            score_idx = lower.index("label")
         if s1_idx is not None and s2_idx is not None and score_idx is not None:
             s1 = []
             s2 = []
@@ -336,9 +340,21 @@ def _parse_sts_rows(header: List[str], rows: List[List[str]]) -> Tuple[List[str]
             for row in rows:
                 if len(row) <= max(s1_idx, s2_idx, score_idx):
                     continue
+                try:
+                    score = float(row[score_idx])
+                except ValueError:
+                    score = None
+                    for value in reversed(row):
+                        try:
+                            score = float(value)
+                            break
+                        except ValueError:
+                            continue
+                if score is None:
+                    continue
                 s1.append(row[s1_idx])
                 s2.append(row[s2_idx])
-                scores.append(float(row[score_idx]))
+                scores.append(score)
             return s1, s2, scores
 
     s1 = []
@@ -347,9 +363,21 @@ def _parse_sts_rows(header: List[str], rows: List[List[str]]) -> Tuple[List[str]
     for row in rows:
         if len(row) < 3:
             continue
+        score = None
+        try:
+            score = float(row[2])
+        except ValueError:
+            for value in reversed(row):
+                try:
+                    score = float(value)
+                    break
+                except ValueError:
+                    continue
+        if score is None:
+            continue
         s1.append(row[0])
         s2.append(row[1])
-        scores.append(float(row[2]))
+        scores.append(score)
     return s1, s2, scores
 
 
