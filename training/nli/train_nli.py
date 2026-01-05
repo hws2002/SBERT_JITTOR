@@ -15,20 +15,26 @@ import os
 import sys
 import time
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable
 
 import numpy as np
 import jittor as jt
 from jittor import nn
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from datasets import load_from_disk, concatenate_datasets
 from torch.utils.data import DataLoader
 
 from model.sbert_model import SBERTJittor
 from losses.softmax_loss import SoftmaxLoss
 from losses.complex_softmax_loss import ComplexSoftmaxLoss
+from utils.data_loader import prepare_nli_dataset, prepare_sts_dataset, collate_nli, collate_sts
+from utils.training_utils import (
+    checkpoint_path,
+    resolve_cache_dir,
+    resolve_output_dir,
+    resolve_tokenizer_source,
+    safe_model_name,
+)
 
 # Set the log level to INFO
 logging.basicConfig(
@@ -40,11 +46,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 STS_DATASETS = ["STS-12", "STS-13", "STS-14", "STS-15", "STS-16", "STS-B", "SICKR"]
-HF_DIR = "./hf"
-MODEL_DIR_MAP = {
-    "bert-large-uncased": "hf_bert_large",
-    "bert-base-uncased": "hf_bert_base",
-}
 
 
 def _jt_array(data, dtype: str):
@@ -69,205 +70,6 @@ def _to_jittor_batch(batch: Dict[str, Iterable], for_sts: bool = False) -> Dict[
         out["scores"] = _jt_array(batch["scores"], "float32")
     else:
         out["labels"] = _jt_array(batch["labels"], "int32")
-
-    return out
-
-
-def _safe_model_id(model_name: str) -> str:
-    base_name = Path(model_name).name
-    return base_name.replace("/", "_")
-
-
-def _cache_path(cache_dir: str, dataset_name: str, split: str, model_name: str, max_length: int) -> str:
-    model_id = _safe_model_id(model_name)
-    name = f"{dataset_name}_{split}_{model_id}_len{max_length}"
-    return os.path.join(cache_dir, name)
-
-
-def _tokenize_pair(
-    tokenizer,
-    sentences_a: List[str],
-    sentences_b: List[str],
-    max_length: int
-) -> Dict[str, List[List[int]]]:
-    enc_a = tokenizer(
-        sentences_a,
-        padding="max_length",
-        truncation=True,
-        max_length=max_length,
-    )
-    enc_b = tokenizer(
-        sentences_b,
-        padding="max_length",
-        truncation=True,
-        max_length=max_length,
-    )
-
-    out = {
-        "input_ids_a": enc_a["input_ids"],
-        "attention_mask_a": enc_a["attention_mask"],
-        "input_ids_b": enc_b["input_ids"],
-        "attention_mask_b": enc_b["attention_mask"],
-    }
-
-    if "token_type_ids" in enc_a:
-        out["token_type_ids_a"] = enc_a["token_type_ids"]
-    if "token_type_ids" in enc_b:
-        out["token_type_ids_b"] = enc_b["token_type_ids"]
-
-    return out
-
-
-def prepare_nli_dataset(
-    data_dir: str,
-    datasets: List[str],
-    split: str,
-    tokenizer,
-    max_length: int,
-    cache_dir: str,
-    overwrite_cache: bool,
-    tokenize_batch_size: int
-):
-    def _map_split(dataset_name: str, requested_split: str) -> str:
-        if dataset_name.lower() in {"multinli", "multi_nli", "multi-nli"}:
-            if requested_split in {"train", "validation_matched", "validation_mismatched"}:
-                return requested_split
-            if requested_split in {"validation", "dev"}:
-                return "validation_matched"
-            if requested_split == "test":
-                return "validation_mismatched"
-            raise ValueError(
-                f"Unsupported split '{requested_split}' for MultiNLI. "
-                "Use train / validation_matched / validation_mismatched."
-            )
-
-        if dataset_name.lower() == "snli":
-            if requested_split in {"train", "validation", "test"}:
-                return requested_split
-            if requested_split in {"validation_matched", "dev"}:
-                return "validation"
-            if requested_split == "validation_mismatched":
-                return "test"
-            raise ValueError(
-                f"Unsupported split '{requested_split}' for SNLI. Use train / validation / test."
-            )
-
-        return requested_split
-
-    tokenized_datasets = []
-
-    for dataset_name in datasets:
-        data_path = os.path.join(data_dir, dataset_name)
-        actual_split = _map_split(dataset_name, split)
-        raw_ds = load_from_disk(data_path)[actual_split]
-        raw_ds = raw_ds.filter(lambda x: x["label"] != -1)
-
-        cache_path = _cache_path(cache_dir, dataset_name, actual_split, tokenizer.name_or_path, max_length)
-        if os.path.isdir(cache_path) and not overwrite_cache:
-            logger.info(f"Loading cached NLI dataset: {cache_path}")
-            tokenized = load_from_disk(cache_path)
-        else:
-            logger.info(f"Tokenizing NLI dataset: {dataset_name}/{actual_split}")
-
-            def tokenize_fn(batch):
-                tok = _tokenize_pair(
-                    tokenizer,
-                    batch["premise"],
-                    batch["hypothesis"],
-                    max_length
-                )
-                tok["labels"] = batch["label"]
-                return tok
-
-            tokenized = raw_ds.map(
-                tokenize_fn,
-                batched=True,
-                batch_size=tokenize_batch_size,
-                remove_columns=raw_ds.column_names,
-                desc=f"Tokenizing {dataset_name}/{actual_split}"
-            )
-            Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-            tokenized.save_to_disk(cache_path)
-
-        tokenized_datasets.append(tokenized)
-
-    if len(tokenized_datasets) == 1:
-        return tokenized_datasets[0]
-    return concatenate_datasets(tokenized_datasets)
-
-
-def prepare_sts_dataset(
-    data_dir: str,
-    dataset_name: str,
-    split: str,
-    tokenizer,
-    max_length: int,
-    cache_dir: str,
-    overwrite_cache: bool,
-    tokenize_batch_size: int
-):
-    data_path = os.path.join(data_dir, dataset_name)
-    raw_ds = load_from_disk(data_path)[split]
-
-    cache_path = _cache_path(cache_dir, dataset_name, split, tokenizer.name_or_path, max_length)
-    if os.path.isdir(cache_path) and not overwrite_cache:
-        logger.info(f"Loading cached STS dataset: {cache_path}")
-        return load_from_disk(cache_path)
-
-    logger.info(f"Tokenizing STS dataset: {dataset_name}/{split}")
-
-    def tokenize_fn(batch):
-        tok = _tokenize_pair(
-            tokenizer,
-            batch["sentence1"],
-            batch["sentence2"],
-            max_length
-        )
-        tok["scores"] = batch["score"]
-        return tok
-
-    tokenized = raw_ds.map(
-        tokenize_fn,
-        batched=True,
-        batch_size=tokenize_batch_size,
-        remove_columns=raw_ds.column_names,
-        desc=f"Tokenizing {dataset_name}/{split}"
-    )
-    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-    tokenized.save_to_disk(cache_path)
-    return tokenized
-
-
-def collate_nli(batch: List[Dict]) -> Dict[str, np.ndarray]:
-    out = {
-        "input_ids_a": np.asarray([b["input_ids_a"] for b in batch], dtype=np.int32),
-        "attention_mask_a": np.asarray([b["attention_mask_a"] for b in batch], dtype=np.float32),
-        "input_ids_b": np.asarray([b["input_ids_b"] for b in batch], dtype=np.int32),
-        "attention_mask_b": np.asarray([b["attention_mask_b"] for b in batch], dtype=np.float32),
-        "labels": np.asarray([b["labels"] for b in batch], dtype=np.int32),
-    }
-
-    if "token_type_ids_a" in batch[0]:
-        out["token_type_ids_a"] = np.asarray([b["token_type_ids_a"] for b in batch], dtype=np.int32)
-    if "token_type_ids_b" in batch[0]:
-        out["token_type_ids_b"] = np.asarray([b["token_type_ids_b"] for b in batch], dtype=np.int32)
-
-    return out
-
-
-def collate_sts(batch: List[Dict]) -> Dict[str, np.ndarray]:
-    out = {
-        "input_ids_a": np.asarray([b["input_ids_a"] for b in batch], dtype=np.int32),
-        "attention_mask_a": np.asarray([b["attention_mask_a"] for b in batch], dtype=np.float32),
-        "input_ids_b": np.asarray([b["input_ids_b"] for b in batch], dtype=np.int32),
-        "attention_mask_b": np.asarray([b["attention_mask_b"] for b in batch], dtype=np.float32),
-        "scores": np.asarray([b["scores"] for b in batch], dtype=np.float32),
-    }
-
-    if "token_type_ids_a" in batch[0]:
-        out["token_type_ids_a"] = np.asarray([b["token_type_ids_a"] for b in batch], dtype=np.int32)
-    if "token_type_ids_b" in batch[0]:
-        out["token_type_ids_b"] = np.asarray([b["token_type_ids_b"] for b in batch], dtype=np.int32)
 
     return out
 
@@ -299,11 +101,42 @@ def evaluate_sts(model, dataloader):
 
             emb_a_np = emb_a.numpy()
             emb_b_np = emb_b.numpy()
+            if emb_a_np.ndim == 1:
+                emb_a_np = emb_a_np.reshape(1, -1)
+            if emb_b_np.ndim == 1:
+                emb_b_np = emb_b_np.reshape(1, -1)
             denom = np.linalg.norm(emb_a_np, axis=1) * np.linalg.norm(emb_b_np, axis=1) + 1e-9
             sim = np.sum(emb_a_np * emb_b_np, axis=1) / denom
 
-            all_predictions.extend(sim.tolist())
-            all_scores.extend(np.asarray(batch["scores"]).tolist())
+            scores_np = jt_batch["scores"].numpy().reshape(-1)
+            sim_np = np.asarray(sim).reshape(-1)
+            if sim_np.shape[0] != scores_np.shape[0]:
+                logger.warning(
+                    f"STS eval length mismatch (pred {sim_np.shape[0]} vs scores {scores_np.shape[0]}). "
+                    "Recomputing per-sample."
+                )
+                preds = []
+                for idx in range(scores_np.shape[0]):
+                    emb_a_i = model.encode(
+                        jt_batch["input_ids_a"][idx:idx + 1],
+                        jt_batch["attention_mask_a"][idx:idx + 1],
+                        jt_batch.get("token_type_ids_a", None)[idx:idx + 1]
+                        if "token_type_ids_a" in jt_batch else None,
+                    )
+                    emb_b_i = model.encode(
+                        jt_batch["input_ids_b"][idx:idx + 1],
+                        jt_batch["attention_mask_b"][idx:idx + 1],
+                        jt_batch.get("token_type_ids_b", None)[idx:idx + 1]
+                        if "token_type_ids_b" in jt_batch else None,
+                    )
+                    emb_a_i = emb_a_i.numpy().reshape(1, -1)
+                    emb_b_i = emb_b_i.numpy().reshape(1, -1)
+                    denom_i = np.linalg.norm(emb_a_i, axis=1) * np.linalg.norm(emb_b_i, axis=1) + 1e-9
+                    sim_i = np.sum(emb_a_i * emb_b_i, axis=1) / denom_i
+                    preds.append(float(sim_i[0]))
+                sim_np = np.asarray(preds)
+            all_predictions.extend(sim_np.tolist())
+            all_scores.extend(scores_np.tolist())
 
     pearson_corr, _ = pearsonr(all_predictions, all_scores)
     spearman_corr, _ = spearmanr(all_predictions, all_scores)
@@ -366,7 +199,7 @@ def save_eval_results(
     output_dir: Path,
 ):
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_model = args.base_model.replace("/", "_")
+    safe_model = safe_model_name(args.base_model)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_path = output_dir / f"eval_{safe_model}_{timestamp}.json"
 
@@ -424,7 +257,11 @@ def setup_wandb(args):
     try:
         import wandb
 
-        run_name = args.run_name if args.run_name else f"nli-{args.base_model.split('/')[-1]}-{args.pooling}"
+        if args.run_name:
+            run_name = args.run_name
+        else:
+            ablation_suffix = f"-abl{args.ablation}" if args.ablation else ""
+            run_name = f"nli-{args.base_model.split('/')[-1]}-{args.pooling}{ablation_suffix}"
 
         wandb.init(
             project=args.wandb_project,
@@ -432,6 +269,8 @@ def setup_wandb(args):
             config={
                 "model": args.base_model,
                 "pooling": args.pooling,
+                "loss": args.loss,
+                "ablation": args.ablation,
                 "batch_size": args.batch_size,
                 "learning_rate": args.lr,
                 "max_length": args.max_length,
@@ -458,9 +297,8 @@ def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name="
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_model = args.base_model.replace("/", "_")
     if name == "best":
-        checkpoint_path = output_dir / f"{safe_model}_best.pkl"
+        path = checkpoint_path(output_dir, args.base_model, "best")
     else:
         logger.info("Skipping non-best checkpoint save (encoder-only mode).")
         return None
@@ -471,9 +309,9 @@ def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name="
         "pooling": args.pooling,
     }
 
-    jt.save(checkpoint, str(checkpoint_path))
-    logger.info(f"Checkpoint saved: {checkpoint_path}")
-    return checkpoint_path
+    jt.save(checkpoint, str(path))
+    logger.info(f"Checkpoint saved: {path}")
+    return path
 
 
 def save_encoder_only(model, args, output_dir: Path, name: str):
@@ -528,18 +366,15 @@ def train(args):
     setup_device(args.use_cuda)
     wandb = setup_wandb(args)
 
-    tokenizer_source = args.base_model
-    if not os.path.isdir(tokenizer_source):
-        mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
-        candidate = os.path.join(HF_DIR, mapped)
-        if os.path.isdir(candidate):
-            tokenizer_source = candidate
-    if not os.path.isdir(tokenizer_source):
-        raise ValueError("Expected local model directory for tokenizer (base_model).")
+    tokenizer_source = resolve_tokenizer_source(
+        args.base_model,
+        tokenizer_dir=args.tokenizer_dir,
+        encoder_checkpoint=args.encoder_checkpoint,
+    )
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
 
-    cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
+    cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
 
     logger.info("Preparing NLI training data (cached tokenization)...")
     train_dataset = prepare_nli_dataset(
@@ -575,8 +410,23 @@ def train(args):
     )
     logger.info(f"Model embedding dimension: {model.output_dim}")
 
-    train_loss = SoftmaxLoss(model=model, num_labels=args.num_labels)
-    optimizer = nn.Adam(train_loss.parameters(), lr=args.lr)
+    if args.loss == "complex":
+        train_loss = ComplexSoftmaxLoss(
+            model=model,
+            num_labels=args.num_labels,
+            ablation=args.ablation,
+        )
+    else:
+        train_loss = SoftmaxLoss(
+            model=model,
+            num_labels=args.num_labels,
+            ablation=args.ablation,
+        )
+    optimizer = jt.optim.AdamW(
+        train_loss.parameters(),
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+    )
     warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
     logger.info(f"Warmup steps: {warmup_steps}")
 
@@ -740,7 +590,8 @@ def train(args):
         collate_fn=collate_sts
     )
 
-    best_path = Path(args.output_dir) / "best.pkl"
+    safe_model = safe_model_name(args.base_model)
+    best_path = checkpoint_path(args.output_dir, args.base_model, "best")
     if best_path.is_file():
         logger.info(f"Loading best checkpoint for final test: {best_path}")
         best_state = jt.load(str(best_path))
@@ -764,7 +615,7 @@ def train(args):
     logger.info("Final Evaluation on STS/SICKR Test Sets (Best Checkpoint)")
     logger.info("=" * 70)
 
-    best_path = Path(args.output_dir) / "best.pkl"
+    best_path = checkpoint_path(args.output_dir, args.base_model, "best")
     if best_path.is_file():
         logger.info(f"Loading best checkpoint for evaluation: {best_path}")
         best_state = jt.load(str(best_path))
@@ -804,14 +655,11 @@ def train_torch(args):
     from torch.utils.data import DataLoader as TorchDataLoader
     from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
-    model_source = args.base_model
-    if not os.path.isdir(model_source):
-        mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
-        candidate = os.path.join(HF_DIR, mapped)
-        if os.path.isdir(candidate):
-            model_source = candidate
-    if not os.path.isdir(model_source):
-        raise ValueError("Torch framework requires a local model directory for base_model.")
+    model_source = resolve_tokenizer_source(
+        args.base_model,
+        tokenizer_dir=args.tokenizer_dir,
+        encoder_checkpoint=args.encoder_checkpoint,
+    )
 
     device = torch.device("cuda" if args.use_cuda and torch.cuda.is_available() else "cpu")
     logger.info(f"Using torch device: {device}")
@@ -819,7 +667,7 @@ def train_torch(args):
     logger.info(f"Loading tokenizer from: {model_source}")
     tokenizer = AutoTokenizer.from_pretrained(model_source, use_fast=True, local_files_only=True)
 
-    cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
+    cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
 
     logger.info("Preparing NLI training data (cached tokenization)...")
     train_dataset = prepare_nli_dataset(
@@ -955,11 +803,19 @@ def parse_args():
     parser.add_argument("--pooling", default="mean",
                         choices=["mean", "cls", "max"],
                         help="Pooling strategy")
+    parser.add_argument("--loss", default="softmax",
+                        choices=["softmax", "complex"],
+                        help="Loss function for NLI training")
+    parser.add_argument("--ablation", type=int, default=0,
+                        choices=[0, 1, 2, 3, 4, 5, 6],
+                        help="Ablation feature set: 0=[u;v;|u-v|], 1=[u;v], 2=[|u-v|], 3=[u*v], 4=[|u-v|;u*v], 5=[u;v;u*v], 6=[u;v;|u-v|;u*v]")
     parser.add_argument("--framework", default="jittor",
                         choices=["jittor", "torch"],
                         help="Training framework")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
+    parser.add_argument("--tokenizer_dir", type=str, default=None,
+                        help="Tokenizer directory (overrides base_model lookup)")
     parser.add_argument("--num_labels", type=int, default=3,
                         help="Number of NLI classification labels")
 
@@ -978,6 +834,8 @@ def parse_args():
                         help="Number of training epochs")
     parser.add_argument("--lr", type=float, default=2e-5,
                         help="Learning rate")
+    parser.add_argument("--weight_decay", type=float, default=0.01,
+                        help="Weight decay for AdamW")
     parser.add_argument("--warmup_ratio", type=float, default=0.1,
                         help="Warmup ratio (fraction of total steps)")
 
@@ -997,7 +855,7 @@ def parse_args():
 
     parser.add_argument("--num_workers", type=int, default=4,
                         help="DataLoader worker processes")
-    parser.add_argument("--cache_dir", type=str, default='./data/tokenized',
+    parser.add_argument("--cache_dir", type=str, default=None,
                         help="Cache directory for tokenized datasets (default: data_dir/_cache)")
     parser.add_argument("--overwrite_cache", action="store_true",
                         help="Overwrite existing cached datasets")
@@ -1013,10 +871,7 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.output_dir is None:
-        model_name = args.base_model.replace("/", "-")
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        args.output_dir = f"checkpoints/training_nli_{model_name}-{timestamp}"
+    args.output_dir = resolve_output_dir(args.output_dir, "training_nli", args.base_model)
 
     return args
 

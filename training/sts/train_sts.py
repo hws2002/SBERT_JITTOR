@@ -13,7 +13,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from datetime import datetime
 from typing import Dict, Iterable
 
 import numpy as np
@@ -26,6 +25,13 @@ from torch.utils.data import DataLoader
 from model.sbert_model import SBERTJittor
 from losses.regression_loss import RegressionLoss
 from utils.data_loader import prepare_sts_dataset, collate_sts
+from utils.training_utils import (
+    checkpoint_path,
+    resolve_cache_dir,
+    resolve_output_dir,
+    resolve_tokenizer_source,
+    safe_model_name,
+)
 
 
 logging.basicConfig(
@@ -36,11 +42,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-HF_DIR = "./hf"
-MODEL_DIR_MAP = {
-    "bert-large-uncased": "hf_bert_large",
-    "bert-base-uncased": "hf_bert_base",
-}
 
 
 def _jt_array(data, dtype: str):
@@ -153,11 +154,10 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_model = args.base_model.replace("/", "_")
     if name == "best":
-        checkpoint_path = output_dir / f"{safe_model}_best.pkl"
+        path = checkpoint_path(output_dir, args.base_model, "best")
     else:
-        checkpoint_path = output_dir / f"{safe_model}_{name}.pkl"
+        path = checkpoint_path(output_dir, args.base_model, name)
 
     checkpoint = {
         "iteration": iteration,
@@ -167,9 +167,9 @@ def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint")
         "pooling": args.pooling,
     }
 
-    jt.save(checkpoint, str(checkpoint_path))
-    logger.info(f"Checkpoint saved: {checkpoint_path}")
-    return checkpoint_path
+    jt.save(checkpoint, str(path))
+    logger.info(f"Checkpoint saved: {path}")
+    return path
 
 
 def load_training_checkpoint(model, optimizer, checkpoint_path: str):
@@ -190,7 +190,7 @@ def load_training_checkpoint(model, optimizer, checkpoint_path: str):
 
 def save_eval_results(results: Dict[str, float], args, output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_model = args.base_model.replace("/", "_")
+    safe_model = safe_model_name(args.base_model)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_path = output_dir / f"eval_sts_{safe_model}_{timestamp}.json"
 
@@ -217,18 +217,6 @@ def save_eval_results(results: Dict[str, float], args, output_dir: Path):
     return output_path
 
 
-def _resolve_tokenizer_source(args) -> str:
-    tokenizer_source = args.base_model
-    if not os.path.isdir(tokenizer_source):
-        mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
-        candidate = os.path.join(HF_DIR, mapped)
-        if os.path.isdir(candidate):
-            tokenizer_source = candidate
-    if not os.path.isdir(tokenizer_source):
-        raise ValueError("Expected local model directory for tokenizer (base_model).")
-    return tokenizer_source
-
-
 def train(args):
     logger.info("=" * 70)
     logger.info("SBERT STS Regression Training (GPU-optimized)")
@@ -248,11 +236,15 @@ def train(args):
     setup_device(args.use_cuda)
     wandb = setup_wandb(args)
 
-    tokenizer_source = _resolve_tokenizer_source(args)
+    tokenizer_source = resolve_tokenizer_source(
+        args.base_model,
+        tokenizer_dir=args.tokenizer_dir,
+        encoder_checkpoint=args.encoder_checkpoint,
+    )
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
 
-    cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
+    cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
 
     logger.info("Preparing STS training data (cached tokenization)...")
     train_dataset = prepare_sts_dataset(
@@ -411,7 +403,7 @@ def train(args):
                             "step": global_step,
                         }
                     )
-                if eval_results["spearman"] > best_spearman:
+                if not args.disable_checkpoint and eval_results["spearman"] > best_spearman:
                     best_spearman = eval_results["spearman"]
                     save_checkpoint(model, optimizer, global_step, epoch + 1, args, name="best")
 
@@ -453,7 +445,7 @@ def train(args):
         collate_fn=collate_sts,
     )
 
-    best_path = Path(args.output_dir) / "best.pkl"
+    best_path = checkpoint_path(args.output_dir, args.base_model, "best")
     if best_path.is_file():
         logger.info(f"Loading best checkpoint for final evaluation: {best_path}")
         best_state = jt.load(str(best_path))
@@ -529,10 +521,12 @@ def parse_args():
                         help="Pooling strategy")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
+    parser.add_argument("--tokenizer_dir", type=str, default=None,
+                        help="Tokenizer directory (overrides base_model lookup)")
 
     parser.add_argument("--data_dir", default="./data",
                         help="Directory containing datasets")
-    parser.add_argument("--cache_dir", type=str, default="./data/tokenized",
+    parser.add_argument("--cache_dir", type=str, default=None,
                         help="Cache directory for tokenized datasets (default: data_dir/_cache)")
     parser.add_argument("--overwrite_cache", action="store_true",
                         help="Overwrite existing cached datasets")
@@ -568,6 +562,8 @@ def parse_args():
                         help="Evaluate on STS benchmark every N steps")
     parser.add_argument("--save_steps", type=int, default=1000,
                         help="Save checkpoint every N steps (0 to disable)")
+    parser.add_argument("--disable_checkpoint", action="store_true",
+                        help="Disable saving best checkpoints")
     parser.add_argument("--num_workers", type=int, default=4,
                         help="DataLoader worker processes")
     parser.add_argument("--use_cuda", action="store_true",
@@ -591,14 +587,13 @@ def parse_args():
 
     args = parser.parse_args()
 
-    if args.output_dir is not None:
-        suffix = "sts-nli" if args.start_from_checkpoints else "sts-only"
-        args.output_dir = os.path.join(args.output_dir, suffix)
-
-    if args.output_dir is None:
-        model_name = args.base_model.replace("/", "-")
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        args.output_dir = f"checkpoints/training_sts_{model_name}-{timestamp}"
+    suffix = "sts-nli" if args.start_from_checkpoints else "sts-only"
+    args.output_dir = resolve_output_dir(
+        args.output_dir,
+        "training_sts",
+        args.base_model,
+        suffix=suffix if args.output_dir else None,
+    )
 
     return args
 

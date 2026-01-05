@@ -22,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from model.sbert_model import SBERTJittor
+from utils.training_utils import resolve_cache_dir, resolve_tokenizer_source
 
 logging.basicConfig(
     format="%(asctime)s - %(message)s",
@@ -31,13 +32,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-HF_DIR = "./hf"
-MODEL_DIR_MAP = {
-    "bert-large-uncased": "hf_bert_large",
-    "bert-base-uncased": "hf_bert_base",
-    "roberta-base": "roberta-base",
-    "roberta-large": "roberta-large",
-}
 
 
 def _jt_array(data, dtype: str):
@@ -150,18 +144,6 @@ def setup_wandb(args):
         return None
 
 
-def _resolve_tokenizer_source(base_model: str) -> str:
-    tokenizer_source = base_model
-    if not os.path.isdir(tokenizer_source):
-        mapped = MODEL_DIR_MAP.get(base_model, base_model)
-        candidate = os.path.join(HF_DIR, mapped)
-        if os.path.isdir(candidate):
-            tokenizer_source = candidate
-    if not os.path.isdir(tokenizer_source):
-        raise ValueError("Expected local model directory for tokenizer (base_model).")
-    return tokenizer_source
-
-
 def evaluate(model, classifier, dataloader) -> Dict[str, float]:
     model.eval()
     classifier.eval()
@@ -208,11 +190,15 @@ def train(args):
     setup_device(args.use_cuda)
     wandb = setup_wandb(args)
 
-    tokenizer_source = _resolve_tokenizer_source(args.base_model)
+    tokenizer_source = resolve_tokenizer_source(
+        args.base_model,
+        tokenizer_dir=args.tokenizer_dir,
+        encoder_checkpoint=args.encoder_checkpoint,
+    )
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
 
-    cache_dir = args.cache_dir or os.path.join(args.data_dir, "_cache")
+    cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
 
     logger.info("Preparing SST-2 training data (cached tokenization)...")
     train_dataset = prepare_sst_dataset(
@@ -457,11 +443,13 @@ def parse_args():
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
     parser.add_argument("--jittor_checkpoint", type=str, default=None,
                         help="Optional Jittor checkpoint (.pkl) with model_state")
+    parser.add_argument("--tokenizer_dir", type=str, default=None,
+                        help="Tokenizer directory (overrides base_model lookup)")
 
     parser.add_argument("--data_dir", default="./data",
                         help="Directory containing datasets")
-    parser.add_argument("--cache_dir", type=str, default="./data/tokenized",
-                        help="Cache directory for tokenized datasets")
+    parser.add_argument("--cache_dir", type=str, default=None,
+                        help="Cache directory for tokenized datasets (default: data_dir/_cache)")
     parser.add_argument("--overwrite_cache", action="store_true",
                         help="Overwrite existing cached datasets")
     parser.add_argument("--tokenize_batch_size", type=int, default=1024,
