@@ -1,0 +1,76 @@
+{
+  "model_info": {
+    "type": "sbert_jittor",
+    "model_name": "sroberta-nli-base",
+    "max_length": 128
+  },
+  "evaluation": {
+    "split": "test",
+    "batch_size": 32,
+    "device": "cuda"
+  },
+  "results": [
+    {
+      "dataset": "sts12",
+      "split": "test",
+      "pearson": 75.97355955032334,
+      "spearman": 66.0918403365578,
+      "n_samples": 3108,
+      "eval_time": 6.490544080734253
+    },
+    {
+      "dataset": "sts13",
+      "split": "test",
+      "pearson": 60.60108111963052,
+      "spearman": 64.33686742854168,
+      "n_samples": 1500,
+      "eval_time": 2.946070909500122
+    },
+    {
+      "dataset": "sts14",
+      "split": "test",
+      "pearson": 63.75073971322397,
+      "spearman": 64.19678321910806,
+      "n_samples": 3750,
+      "eval_time": 7.146623134613037
+    },
+    {
+      "dataset": "sts15",
+      "split": "test",
+      "pearson": 71.79630070261958,
+      "spearman": 73.11088525409907,
+      "n_samples": 3000,
+      "eval_time": 5.776702165603638
+    },
+    {
+      "dataset": "sts16",
+      "split": "test",
+      "pearson": 66.4446228316015,
+      "spearman": 69.70853403999062,
+      "n_samples": 1186,
+      "eval_time": 2.3977129459381104
+    },
+    {
+      "dataset": "stsb",
+      "split": "test",
+      "pearson": 70.70916397258257,
+      "spearman": 72.61616439275818,
+      "n_samples": 1379,
+      "eval_time": 2.7385470867156982
+    },
+    {
+      "dataset": "sickr",
+      "split": "test",
+      "pearson": 72.20637931582165,
+      "spearman": 71.31641809619624,
+      "n_samples": 9927,
+      "eval_time": 18.912357807159424
+    }
+  ],
+  "average": {
+    "pearson": 68.78312102940045,
+    "spearman": 68.76821325246452,
+    "n_datasets": 7
+  },
+  "timestamp": "20251225_122443"
+}
