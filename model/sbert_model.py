@@ -7,7 +7,7 @@ Modular architecture inspired by sentence-transformers:
 - Head: optional projection heads (none, linear, mlp)
 """
 
-from typing import Dict, Optional, Literal
+from typing import Dict, Optional, Literal, Tuple
 import os
 import jittor as jt
 from jittor import nn
@@ -171,6 +171,47 @@ class SBERTJittor(nn.Module):
         print(f"  Pooling: {pooling}")
         print(f"  Head: {head_type}")
         print(f"  Output dim: {self.output_dim}")
+
+    @staticmethod
+    def _resolve_checkpoint_path(repo_dir: str, checkpoint_name: Optional[str]) -> str:
+        if checkpoint_name:
+            candidate = os.path.join(repo_dir, checkpoint_name)
+            if not os.path.isfile(candidate):
+                raise FileNotFoundError(f"Checkpoint not found: {candidate}")
+            return candidate
+
+        for name in os.listdir(repo_dir):
+            if name.endswith(".pkl"):
+                return os.path.join(repo_dir, name)
+        raise FileNotFoundError(f"No .pkl checkpoint found in {repo_dir}")
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        repo_id: str,
+        pooling: Literal['mean', 'cls', 'max'] = 'mean',
+        head_type: Literal['none', 'linear', 'mlp'] = 'none',
+        output_dim: Optional[int] = None,
+        checkpoint_name: Optional[str] = None,
+        local_dir: Optional[str] = None,
+        **head_kwargs
+    ) -> Tuple["SBERTJittor", "AutoTokenizer", str]:
+        from transformers import AutoTokenizer
+        from huggingface_hub import snapshot_download
+
+        repo_dir = snapshot_download(repo_id=repo_id, local_dir=local_dir)
+        tokenizer = AutoTokenizer.from_pretrained(repo_dir, use_fast=True)
+        checkpoint_path = cls._resolve_checkpoint_path(repo_dir, checkpoint_name)
+
+        model = cls(
+            encoder_name=repo_dir,
+            pooling=pooling,
+            head_type=head_type,
+            output_dim=output_dim,
+            checkpoint_path=checkpoint_path,
+            **head_kwargs
+        )
+        return model, tokenizer, repo_dir
 
     @property
     def output_dim(self) -> int:
