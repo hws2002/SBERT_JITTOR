@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sbert-jittor"
+version = "0.1.0"
+description = "Sentence-BERT implemented in Jittor"
+readme = "readme.md"
+requires-python = ">=3.9"
+
+[tool.setuptools]
+packages = {find = {where = ["."]}}
