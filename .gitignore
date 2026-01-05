@@ -11,7 +11,6 @@ wheels/
 
 output/
 hf/
-<<<<<<<<< Temporary merge branch 1
 
 debug/
 =========
@@ -21,4 +20,5 @@ result/
 test.py
 
 torun.sh
->>>>>>>>> Temporary merge branch 2
+
+important_checkpoints/
