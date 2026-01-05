@@ -7,7 +7,7 @@ Modular architecture inspired by sentence-transformers:
 - Head: optional projection heads (none, linear, mlp)
 """
 
-from typing import Dict, Optional, Literal, Tuple
+from typing import Dict, Optional, Literal, Tuple, Union
 import os
 import jittor as jt
 from jittor import nn
@@ -128,6 +128,12 @@ class SBERTJittor(nn.Module):
         output_dim: Optional[int] = None,
         config: Optional[BertConfig] = None,
         checkpoint_path: Optional[str] = None,
+        pretrained: bool = False,
+        model_id: Optional[str] = None,
+        checkpoint_name: Optional[str] = None,
+        local_dir: Optional[str] = None,
+        registry: Optional[Dict[str, str]] = None,
+        use_checkpoint_pooling: bool = True,
         **head_kwargs
     ):
         """
@@ -141,6 +147,23 @@ class SBERTJittor(nn.Module):
             **head_kwargs: Additional arguments for projection head (e.g., hidden_dim, num_layers)
         """
         super().__init__()
+
+        repo_dir = None
+        payload = None
+        if pretrained:
+            resolved_id = model_id or encoder_name
+            if checkpoint_path is None:
+                checkpoint_path, repo_dir = self._resolve_pretrained_checkpoint(
+                    resolved_id,
+                    checkpoint_name=checkpoint_name,
+                    local_dir=local_dir,
+                    registry=registry,
+                )
+            payload = self._load_jittor_checkpoint(checkpoint_path)
+            if payload is not None:
+                encoder_name = payload.get("base_model", encoder_name)
+                if use_checkpoint_pooling:
+                    pooling = payload.get("pooling", pooling)
 
         self.encoder_name = encoder_name
         self.pooling_mode = pooling
@@ -163,7 +186,12 @@ class SBERTJittor(nn.Module):
         self.head = self._build_head(head_type, hidden_size, output_dim, **head_kwargs)
 
         # Load checkpoint if provided
-        if checkpoint_path:
+        if pretrained:
+            if payload is not None:
+                self.load_state_dict(payload["model_state"])
+            elif checkpoint_path:
+                self.load_checkpoint(checkpoint_path)
+        elif checkpoint_path:
             self.load_checkpoint(checkpoint_path)
 
         print(f"SBERTJittor initialized:")
@@ -186,32 +214,114 @@ class SBERTJittor(nn.Module):
         raise FileNotFoundError(f"No .pkl checkpoint found in {repo_dir}")
 
     @classmethod
-    def from_pretrained(
+    def _resolve_pretrained_checkpoint(
         cls,
-        repo_id: str,
-        pooling: Literal['mean', 'cls', 'max'] = 'mean',
-        head_type: Literal['none', 'linear', 'mlp'] = 'none',
-        output_dim: Optional[int] = None,
+        model_id: str,
+        *,
         checkpoint_name: Optional[str] = None,
         local_dir: Optional[str] = None,
-        **head_kwargs
-    ) -> Tuple["SBERTJittor", "AutoTokenizer", str]:
-        from transformers import AutoTokenizer
+        registry: Optional[Dict[str, str]] = None,
+    ) -> Tuple[str, Optional[str]]:
+        if os.path.isfile(model_id):
+            return model_id, os.path.dirname(model_id)
+        if os.path.isdir(model_id):
+            return cls._resolve_checkpoint_path(model_id, checkpoint_name), model_id
+
+        lookup = registry if registry is not None else MODEL_REGISTRY
+        if model_id in lookup:
+            checkpoint_path = lookup[model_id]
+            return checkpoint_path, os.path.dirname(checkpoint_path)
+
         from huggingface_hub import snapshot_download
 
-        repo_dir = snapshot_download(repo_id=repo_id, local_dir=local_dir)
-        tokenizer = AutoTokenizer.from_pretrained(repo_dir, use_fast=True)
+        repo_dir = snapshot_download(repo_id=model_id, local_dir=local_dir)
         checkpoint_path = cls._resolve_checkpoint_path(repo_dir, checkpoint_name)
+        return checkpoint_path, repo_dir
 
-        model = cls(
-            encoder_name=repo_dir,
-            pooling=pooling,
-            head_type=head_type,
-            output_dim=output_dim,
-            checkpoint_path=checkpoint_path,
-            **head_kwargs
-        )
-        return model, tokenizer, repo_dir
+    @staticmethod
+    def _load_jittor_checkpoint(checkpoint_path: str) -> Optional[dict]:
+        try:
+            payload = jt.load(checkpoint_path)
+        except Exception:
+            return None
+        if isinstance(payload, dict) and "model_state" in payload:
+            return payload
+        return None
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_id: str,
+        *,
+        checkpoint_name: Optional[str] = None,
+        local_dir: Optional[str] = None,
+        registry: Optional[Dict[str, str]] = None,
+        pooling: Optional[Literal['mean', 'cls', 'max']] = None,
+        head_type: Literal['none', 'linear', 'mlp'] = 'none',
+        output_dim: Optional[int] = None,
+        return_tokenizer: bool = False,
+        **head_kwargs,
+    ) -> Union['SBERTJittor', Tuple['SBERTJittor', 'AutoTokenizer', str]]:
+        """
+        Load a Jittor SBERT checkpoint from a local path/dir or Hugging Face repo.
+
+        Returns the model only by default. Use return_tokenizer=True to also
+        get (model, tokenizer, repo_dir).
+        """
+        repo_dir = None
+        checkpoint_path = None
+
+        if os.path.isfile(model_id):
+            checkpoint_path = model_id
+            repo_dir = os.path.dirname(model_id)
+        elif os.path.isdir(model_id):
+            repo_dir = model_id
+            checkpoint_path = cls._resolve_checkpoint_path(repo_dir, checkpoint_name)
+        else:
+            lookup = registry if registry is not None else MODEL_REGISTRY
+            if model_id in lookup:
+                checkpoint_path = lookup[model_id]
+                repo_dir = os.path.dirname(checkpoint_path)
+            else:
+                from huggingface_hub import snapshot_download
+
+                repo_dir = snapshot_download(repo_id=model_id, local_dir=local_dir)
+                checkpoint_path = cls._resolve_checkpoint_path(repo_dir, checkpoint_name)
+
+        payload = cls._load_jittor_checkpoint(checkpoint_path)
+        base_model = model_id
+
+        if payload is not None:
+            base_model = payload.get('base_model', base_model)
+            use_pooling = pooling or payload.get('pooling', 'mean')
+            model = cls(
+                encoder_name=base_model,
+                pooling=use_pooling,
+                head_type=head_type,
+                output_dim=output_dim,
+                checkpoint_path=None,
+                **head_kwargs,
+            )
+            model.load_state_dict(payload['model_state'])
+        else:
+            use_pooling = pooling or 'mean'
+            model = cls(
+                encoder_name=repo_dir or base_model,
+                pooling=use_pooling,
+                head_type=head_type,
+                output_dim=output_dim,
+                checkpoint_path=checkpoint_path,
+                **head_kwargs,
+            )
+
+        if return_tokenizer:
+            from transformers import AutoTokenizer
+
+            tokenizer_source = repo_dir or base_model
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
+            return model, tokenizer, repo_dir or os.path.dirname(checkpoint_path)
+
+        return model
 
     @property
     def output_dim(self) -> int:
@@ -401,45 +511,6 @@ class SBERTJittor(nn.Module):
             self.head.load_state_dict(checkpoint['head_state'])
         print(f"Model loaded from {load_path}")
 
-    @classmethod
-    def from_pretrained(
-        cls,
-        model_id: str,
-        *,
-        base_model: Optional[str] = None,
-        pooling: Literal['mean', 'cls', 'max'] = 'mean',
-        registry: Optional[Dict[str, str]] = None,
-    ):
-        """
-        Load SBERTJittor from a local checkpoint registry.
-        """
-        model_path = None
-        if os.path.isfile(model_id):
-            model_path = model_id
-        else:
-            lookup = registry if registry is not None else MODEL_REGISTRY
-            model_path = lookup.get(model_id)
-
-        if model_path is None:
-            raise ValueError(
-                "Unknown model_id. Provide a local path or add it to MODEL_REGISTRY."
-            )
-
-        payload = jt.load(model_path)
-        if not isinstance(payload, dict) or "model_state" not in payload:
-            raise ValueError("Expected a Jittor checkpoint with model_state.")
-
-        model_name = base_model or payload.get("base_model", "bert-base-uncased")
-        pooling = payload.get("pooling", pooling)
-
-        model = cls(
-            encoder_name=model_name,
-            pooling=pooling,
-            head_type="none",
-            checkpoint_path=None,
-        )
-        model.load_state_dict(payload["model_state"])
-        return model
 
 
 def _remap_hf_encoder_state(state_dict: dict) -> dict:
