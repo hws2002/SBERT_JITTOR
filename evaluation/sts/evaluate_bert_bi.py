@@ -217,7 +217,7 @@ def main():
 
     model_dir = _resolve_model_dir(args.base_model, args.model_root)
     logger.info(f"Loading tokenizer from: {model_dir}")
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
 
     wandb = None
     if args.wandb:

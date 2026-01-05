@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from model.sbert_model import SBERTJittor
-from utils.training_utils import resolve_cache_dir, resolve_tokenizer_source
+from utils.training_utils import TrainConfig
 
 logging.basicConfig(
     format="%(asctime)s - %(message)s",
@@ -175,6 +175,7 @@ def evaluate(model, classifier, dataloader) -> Dict[str, float]:
 
 
 def train(args):
+    config = TrainConfig.from_args(args, "training_sst")
     logger.info("=" * 70)
     logger.info("SBERT SST-2 Training")
     logger.info("=" * 70)
@@ -190,15 +191,11 @@ def train(args):
     setup_device(args.use_cuda)
     wandb = setup_wandb(args)
 
-    tokenizer_source = resolve_tokenizer_source(
-        args.base_model,
-        tokenizer_dir=args.tokenizer_dir,
-        encoder_checkpoint=args.encoder_checkpoint,
-    )
+    tokenizer_source = config.tokenizer_path
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
 
-    cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
+    cache_dir = config.cache_dir
 
     logger.info("Preparing SST-2 training data (cached tokenization)...")
     train_dataset = prepare_sst_dataset(
@@ -245,7 +242,7 @@ def train(args):
         encoder_name=args.base_model,
         pooling=args.pooling,
         head_type="none",
-        checkpoint_path=args.encoder_checkpoint,
+        checkpoint_path=config.pretrained_checkpoint_path,
     )
     if args.jittor_checkpoint:
         payload = jt.load(args.jittor_checkpoint)

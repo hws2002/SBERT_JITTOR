@@ -5,6 +5,7 @@ Shared training helpers for tokenizer, cache/output paths, and checkpoints.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -70,3 +71,43 @@ def checkpoint_path(output_dir: str | Path, base_model: str, tag: str = "best") 
     else:
         name = f"{safe_model}_{tag}.pkl"
     return Path(output_dir) / name
+
+
+@dataclass(frozen=True)
+class TrainConfig:
+    base_model: str
+    data_dir: str
+    cache_dir: str
+    tokenizer_path: str
+    pretrained_checkpoint_path: Optional[str]
+    checkpoint_output_path: str
+
+    @classmethod
+    def from_args(
+        cls,
+        args,
+        task: str,
+        output_suffix: Optional[str] = None,
+    ) -> "TrainConfig":
+        output_dir = getattr(args, "output_dir", None)
+        cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
+        tokenizer_path = resolve_tokenizer_source(
+            args.base_model,
+            tokenizer_dir=getattr(args, "tokenizer_dir", None),
+            encoder_checkpoint=getattr(args, "encoder_checkpoint", None),
+        )
+        checkpoint_output_path = resolve_output_dir(
+            output_dir,
+            task,
+            args.base_model,
+            suffix=output_suffix if output_dir else None,
+        )
+        pretrained_checkpoint_path = getattr(args, "encoder_checkpoint", None)
+        return cls(
+            base_model=args.base_model,
+            data_dir=args.data_dir,
+            cache_dir=cache_dir,
+            tokenizer_path=tokenizer_path,
+            pretrained_checkpoint_path=pretrained_checkpoint_path,
+            checkpoint_output_path=checkpoint_output_path,
+        )

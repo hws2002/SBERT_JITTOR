@@ -256,8 +256,8 @@ def main():
     logger.info(f"Using device: {device}")
 
     logger.info(f"Loading tokenizer from: {args.model_path}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, use_fast=True, local_files_only=True)
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_path, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, use_fast=True)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_path)
     if args.head_checkpoint:
         logger.info(f"Loading classifier head from: {args.head_checkpoint}")
         _load_head_weights(model, args.head_checkpoint)

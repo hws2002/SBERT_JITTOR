@@ -1,10 +1,6 @@
 """
 Train SBERT on NLI datasets (SNLI + MultiNLI) with evaluation on STS benchmark
 
-The system trains BERT on the SNLI + MultiNLI (AllNLI) dataset
-with cross-entropy loss. At every N training steps, the model is evaluated on the
-STS benchmark dataset.
-
 Inspired by: https://github.com/UKPLab/sentence-transformers/blob/master/examples/training/nli/training_nli.py
 """
 
@@ -22,17 +18,15 @@ import jittor as jt
 from jittor import nn
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from torch.utils.data import DataLoader
+from jittor.dataset import DataLoader
 
 from model.sbert_model import SBERTJittor
 from losses.softmax_loss import SoftmaxLoss
 from losses.complex_softmax_loss import ComplexSoftmaxLoss
 from utils.data_loader import prepare_nli_dataset, prepare_sts_dataset, collate_nli, collate_sts
 from utils.training_utils import (
+    TrainConfig,
     checkpoint_path,
-    resolve_cache_dir,
-    resolve_output_dir,
-    resolve_tokenizer_source,
     safe_model_name,
 )
 
@@ -250,44 +244,6 @@ def setup_device(use_cuda):
         logger.info("Using CPU")
 
 
-def setup_wandb(args):
-    if not args.wandb:
-        return None
-
-    try:
-        import wandb
-
-        if args.run_name:
-            run_name = args.run_name
-        else:
-            ablation_suffix = f"-abl{args.ablation}" if args.ablation else ""
-            run_name = f"nli-{args.base_model.split('/')[-1]}-{args.pooling}{ablation_suffix}"
-
-        wandb.init(
-            project=args.wandb_project,
-            name=run_name,
-            config={
-                "model": args.base_model,
-                "pooling": args.pooling,
-                "loss": args.loss,
-                "ablation": args.ablation,
-                "batch_size": args.batch_size,
-                "learning_rate": args.lr,
-                "max_length": args.max_length,
-                "warmup_ratio": args.warmup_ratio,
-                "epochs": args.epochs,
-                "datasets": args.datasets,
-                "eval_steps": args.eval_steps,
-                "num_workers": args.num_workers,
-            }
-        )
-        logger.info(f"W&B initialized: {args.wandb_project}/{run_name}")
-        return wandb
-    except ImportError:
-        logger.warning("wandb not installed. Skipping W&B logging.")
-        return None
-
-
 def _filtered_loss_state(train_loss):
     loss_state = train_loss.state_dict()
     return {k: v for k, v in loss_state.items() if not k.startswith("model.")}
@@ -348,6 +304,8 @@ def load_training_checkpoint(model, train_loss, optimizer, checkpoint_path: str)
 
 
 def train(args):
+    config = TrainConfig.from_args(args, "training_nli")
+    args.output_dir = config.checkpoint_output_path
     logger.info("=" * 70)
     logger.info("SBERT NLI Training (GPU-optimized)")
     logger.info("=" * 70)
@@ -364,17 +322,11 @@ def train(args):
     logger.info("=" * 70)
 
     setup_device(args.use_cuda)
-    wandb = setup_wandb(args)
-
-    tokenizer_source = resolve_tokenizer_source(
-        args.base_model,
-        tokenizer_dir=args.tokenizer_dir,
-        encoder_checkpoint=args.encoder_checkpoint,
-    )
+    tokenizer_source = config.tokenizer_path
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
 
-    cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
+    cache_dir = config.cache_dir
 
     logger.info("Preparing NLI training data (cached tokenization)...")
     train_dataset = prepare_nli_dataset(
@@ -406,7 +358,7 @@ def train(args):
         encoder_name=args.base_model,
         pooling=args.pooling,
         head_type="none",
-        checkpoint_path=args.encoder_checkpoint,
+        checkpoint_path=config.pretrained_checkpoint_path,
     )
     logger.info(f"Model embedding dimension: {model.output_dim}")
 
@@ -451,13 +403,6 @@ def train(args):
 
     logger.info("\nEvaluation before training:")
     eval_results_before = evaluate_sts(model=model, dataloader=sts_dataloader)
-    if wandb:
-        wandb.log({
-            "eval/pearson": eval_results_before["pearson"],
-            "eval/spearman": eval_results_before["spearman"],
-            "step": 0,
-        })
-
     logger.info("\nStarting training...")
     logger.info("=" * 70)
 
@@ -634,163 +579,6 @@ def train(args):
     )
     payload, output_path = save_eval_results(all_results, args, Path(args.output_dir) / "result")
 
-    if wandb:
-        dataset_metrics = {}
-        for name, info in all_results.items():
-            key = name.lower().replace("sts-", "sts").replace("-b", "b")
-            dataset_metrics[f"{key}/pearson"] = info["pearson"]
-            dataset_metrics[f"{key}/spearman"] = info["spearman"]
-            dataset_metrics[f"{key}/n_samples"] = info["n_samples"]
-        dataset_metrics["avg/pearson"] = payload["average"]["pearson"]
-        dataset_metrics["avg/spearman"] = payload["average"]["spearman"]
-        dataset_metrics["avg/n_datasets"] = payload["average"]["n_datasets"]
-        wandb.log(dataset_metrics)
-
-    if wandb:
-        wandb.finish()
-
-
-def train_torch(args):
-    import torch
-    from torch.utils.data import DataLoader as TorchDataLoader
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
-
-    model_source = resolve_tokenizer_source(
-        args.base_model,
-        tokenizer_dir=args.tokenizer_dir,
-        encoder_checkpoint=args.encoder_checkpoint,
-    )
-
-    device = torch.device("cuda" if args.use_cuda and torch.cuda.is_available() else "cpu")
-    logger.info(f"Using torch device: {device}")
-
-    logger.info(f"Loading tokenizer from: {model_source}")
-    tokenizer = AutoTokenizer.from_pretrained(model_source, use_fast=True, local_files_only=True)
-
-    cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
-
-    logger.info("Preparing NLI training data (cached tokenization)...")
-    train_dataset = prepare_nli_dataset(
-        data_dir=args.data_dir,
-        datasets=args.datasets,
-        split="train",
-        tokenizer=tokenizer,
-        max_length=args.max_length,
-        cache_dir=cache_dir,
-        overwrite_cache=args.overwrite_cache,
-        tokenize_batch_size=args.tokenize_batch_size,
-    )
-
-    train_dataloader = TorchDataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        collate_fn=collate_nli,
-    )
-
-    total_steps = args.epochs * len(train_dataloader)
-    if total_steps == 0:
-        raise RuntimeError("No training data found. Check data_dir/datasets arguments.")
-    logger.info(f"Total training steps: {total_steps}")
-
-    logger.info(f"Initializing Hugging Face classification model from: {model_source}")
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_source,
-        num_labels=args.num_labels,
-        local_files_only=True,
-    )
-    if args.encoder_checkpoint:
-        logger.info(f"Loading encoder checkpoint: {args.encoder_checkpoint}")
-        state = torch.load(args.encoder_checkpoint, map_location="cpu")
-        missing, unexpected = model.base_model.load_state_dict(state, strict=False)
-        if missing or unexpected:
-            logger.info(f"Encoder load missing={len(missing)} unexpected={len(unexpected)}")
-
-    model.to(device)
-
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    warmup_steps = max(int(total_steps * args.warmup_ratio), 1)
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
-    )
-
-    logger.info("\nStarting torch training...")
-    logger.info("=" * 70)
-
-    global_step = 0
-    model.train()
-    for epoch in range(args.epochs):
-        epoch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs}")
-        total_loss = 0.0
-        total_correct = 0
-        total_samples = 0
-
-        for step, batch in enumerate(epoch_iterator, 1):
-            input_ids = torch.tensor(batch["input_ids_a"], device=device)
-            attention_mask = torch.tensor(batch["attention_mask_a"], device=device)
-            token_type_ids = batch.get("token_type_ids_a")
-            if token_type_ids is not None:
-                token_type_ids = torch.tensor(token_type_ids, device=device)
-            labels = torch.tensor(batch["labels"], device=device)
-
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                labels=labels,
-            )
-            loss = outputs.loss
-            logits = outputs.logits
-
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-
-            global_step += 1
-
-            with torch.no_grad():
-                preds = torch.argmax(logits, dim=1)
-                correct = (preds == labels).sum().item()
-                batch_size = labels.size(0)
-
-            total_loss += loss.item() * batch_size
-            total_correct += correct
-            total_samples += batch_size
-
-            avg_loss = total_loss / total_samples
-            accuracy = total_correct / total_samples * 100
-            epoch_iterator.set_postfix({
-                "loss": f"{loss.item():.4f}",
-                "avg_loss": f"{avg_loss:.4f}",
-                "acc": f"{accuracy:.2f}%",
-                "lr": f"{scheduler.get_last_lr()[0]:.2e}",
-            })
-
-            if global_step % args.log_steps == 0:
-                logger.info(
-                    f"Step {global_step}/{total_steps} | "
-                    f"Loss: {loss.item():.4f} | "
-                    f"Avg Loss: {avg_loss:.4f} | "
-                    f"Acc: {accuracy:.2f}% | "
-                    f"LR: {scheduler.get_last_lr()[0]:.2e}"
-                )
-
-    logger.info("\nSaving torch model...")
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    final_dir = output_dir / "final"
-    final_dir.mkdir(exist_ok=True)
-
-    encoder_dir = final_dir / "hf_encoder"
-    encoder_dir.mkdir(exist_ok=True)
-
-    model.base_model.save_pretrained(encoder_dir)
-    tokenizer.save_pretrained(encoder_dir)
-
-    logger.info(f"Saved HF encoder to {encoder_dir}")
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -809,9 +597,6 @@ def parse_args():
     parser.add_argument("--ablation", type=int, default=0,
                         choices=[0, 1, 2, 3, 4, 5, 6],
                         help="Ablation feature set: 0=[u;v;|u-v|], 1=[u;v], 2=[|u-v|], 3=[u*v], 4=[|u-v|;u*v], 5=[u;v;u*v], 6=[u;v;|u-v|;u*v]")
-    parser.add_argument("--framework", default="jittor",
-                        choices=["jittor", "torch"],
-                        help="Training framework")
     parser.add_argument("--encoder_checkpoint", type=str, default=None,
                         help="Optional pretrained encoder checkpoint (.bin/.pt)")
     parser.add_argument("--tokenizer_dir", type=str, default=None,
@@ -862,23 +647,11 @@ def parse_args():
     parser.add_argument("--tokenize_batch_size", type=int, default=1024,
                         help="Batch size used during dataset tokenization")
 
-    parser.add_argument("--wandb", action="store_true",
-                        help="Use Weights & Biases logging")
-    parser.add_argument("--wandb_project", type=str, default="sbert-nli-training",
-                        help="W&B project name")
-    parser.add_argument("--run_name", type=str, default=None,
-                        help="W&B run name (default: auto-generated)")
-
     args = parser.parse_args()
-
-    args.output_dir = resolve_output_dir(args.output_dir, "training_nli", args.base_model)
 
     return args
 
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.framework == "torch":
-        train_torch(args)
-    else:
-        train(args)
+    train(args)

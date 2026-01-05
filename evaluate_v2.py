@@ -276,7 +276,7 @@ def main():
             "Tokenizer not found locally. Provide --tokenizer_dir or a local base_model directory."
         )
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
 
     logger.info("Loading checkpoint...")
     checkpoint = jt.load(args.checkpoint_path)

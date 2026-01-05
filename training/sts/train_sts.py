@@ -20,16 +20,14 @@ import jittor as jt
 from jittor import nn
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from torch.utils.data import DataLoader
+from jittor.dataset import DataLoader
 
 from model.sbert_model import SBERTJittor
 from losses.regression_loss import RegressionLoss
 from utils.data_loader import prepare_sts_dataset, collate_sts
 from utils.training_utils import (
+    TrainConfig,
     checkpoint_path,
-    resolve_cache_dir,
-    resolve_output_dir,
-    resolve_tokenizer_source,
     safe_model_name,
 )
 
@@ -218,6 +216,9 @@ def save_eval_results(results: Dict[str, float], args, output_dir: Path):
 
 
 def train(args):
+    suffix = "sts-nli" if args.start_from_checkpoints else "sts-only"
+    config = TrainConfig.from_args(args, "training_sts", output_suffix=suffix)
+    args.output_dir = config.checkpoint_output_path
     logger.info("=" * 70)
     logger.info("SBERT STS Regression Training (GPU-optimized)")
     logger.info("=" * 70)
@@ -236,15 +237,11 @@ def train(args):
     setup_device(args.use_cuda)
     wandb = setup_wandb(args)
 
-    tokenizer_source = resolve_tokenizer_source(
-        args.base_model,
-        tokenizer_dir=args.tokenizer_dir,
-        encoder_checkpoint=args.encoder_checkpoint,
-    )
+    tokenizer_source = config.tokenizer_path
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
 
-    cache_dir = resolve_cache_dir(args.data_dir, args.cache_dir)
+    cache_dir = config.cache_dir
 
     logger.info("Preparing STS training data (cached tokenization)...")
     train_dataset = prepare_sts_dataset(
@@ -294,7 +291,7 @@ def train(args):
         encoder_name=args.base_model,
         pooling=args.pooling,
         head_type="none",
-        checkpoint_path=args.encoder_checkpoint,
+        checkpoint_path=config.pretrained_checkpoint_path,
     )
     logger.info(f"Model embedding dimension: {model.output_dim}")
 
@@ -586,14 +583,6 @@ def parse_args():
                         help="W&B run name (default: auto-generated)")
 
     args = parser.parse_args()
-
-    suffix = "sts-nli" if args.start_from_checkpoints else "sts-only"
-    args.output_dir = resolve_output_dir(
-        args.output_dir,
-        "training_sts",
-        args.base_model,
-        suffix=suffix if args.output_dir else None,
-    )
 
     return args
 
