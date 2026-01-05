@@ -24,7 +24,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from model.sbert_model import SBERTJittor
+from utils.jittor_batch import _to_jittor_batch_single
 from utils.training_utils import TrainConfig
+from utils.jittor_utils import setup_device
 
 logging.basicConfig(
     format="%(asctime)s - %(message)s",
@@ -34,21 +36,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-
-def _jt_array(data, dtype: str):
-    return jt.array(np.asarray(data, dtype=dtype))
-
-
-def _to_jittor_batch(batch: Dict[str, Iterable]) -> Dict[str, jt.Var]:
-    out: Dict[str, jt.Var] = {
-        "input_ids": _jt_array(batch["input_ids"], "int32"),
-        "attention_mask": _jt_array(batch["attention_mask"], "float32"),
-        "labels": _jt_array(batch["labels"], "int32"),
-    }
-    if "token_type_ids" in batch:
-        out["token_type_ids"] = _jt_array(batch["token_type_ids"], "int32")
-    return out
 
 
 def _cache_path(cache_dir: str, split: str, model_name: str, max_length: int) -> str:
@@ -109,43 +96,6 @@ def collate_mr(batch: List[Dict]) -> Dict[str, np.ndarray]:
     return out
 
 
-def setup_device(use_cuda: bool):
-    if use_cuda and jt.has_cuda:
-        jt.flags.use_cuda = 1
-        logger.info("Using CUDA")
-    else:
-        jt.flags.use_cuda = 0
-        logger.info("Using CPU")
-
-
-def setup_wandb(args):
-    if not args.wandb:
-        return None
-
-    try:
-        import wandb
-
-        run_name = args.run_name if args.run_name else f"mr-{args.base_model}-{args.pooling}"
-        wandb.init(
-            project=args.wandb_project,
-            name=run_name,
-            config={
-                "model": args.base_model,
-                "pooling": args.pooling,
-                "batch_size": args.batch_size,
-                "learning_rate": args.lr,
-                "max_length": args.max_length,
-                "epochs": args.epochs,
-                "warmup_ratio": args.warmup_ratio,
-            },
-        )
-        logger.info(f"W&B initialized: {args.wandb_project}/{run_name}")
-        return wandb
-    except ImportError:
-        logger.warning("wandb not installed. Skipping W&B logging.")
-        return None
-
-
 def evaluate(model, classifier, dataloader) -> Dict[str, float]:
     model.eval()
     classifier.eval()
@@ -156,7 +106,7 @@ def evaluate(model, classifier, dataloader) -> Dict[str, float]:
 
     with jt.no_grad():
         for batch in dataloader:
-            jt_batch = _to_jittor_batch(batch)
+            jt_batch = _to_jittor_batch_single(batch)
             reps = model.encode(
                 jt_batch["input_ids"],
                 jt_batch["attention_mask"],
@@ -191,8 +141,6 @@ def train(args):
     logger.info("=" * 70)
 
     setup_device(args.use_cuda)
-    wandb = setup_wandb(args)
-
     tokenizer_source = config.tokenizer_path
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
@@ -271,14 +219,6 @@ def train(args):
     logger.info(
         f"Initial Eval - Loss: {eval_before['loss']:.4f}, Acc: {eval_before['accuracy']:.2f}"
     )
-    if wandb:
-        wandb.log(
-            {
-                "eval/loss": eval_before["loss"],
-                "eval/accuracy": eval_before["accuracy"],
-                "step": global_step,
-            }
-        )
 
     total_loss = 0.0
     total_correct = 0
@@ -290,7 +230,7 @@ def train(args):
 
     for epoch in range(start_epoch, args.epochs):
         for step, batch in enumerate(train_loader, 1):
-            jt_batch = _to_jittor_batch(batch)
+            jt_batch = _to_jittor_batch_single(batch)
             if args.train_encoder:
                 reps = model.encode(
                     jt_batch["input_ids"],
@@ -330,16 +270,6 @@ def train(args):
                     f"Avg Loss: {avg_loss:.4f} | Acc: {acc:.2f}% | "
                     f"LR: {optimizer.lr:.2e}"
                 )
-                if wandb:
-                    wandb.log(
-                        {
-                            "train/loss": loss.item(),
-                            "train/avg_loss": avg_loss,
-                            "train/accuracy": acc,
-                            "train/lr": optimizer.lr,
-                            "step": global_step,
-                        }
-                    )
 
             if global_step % args.eval_steps == 0:
                 eval_scores = evaluate(model, classifier, dev_loader)
@@ -347,14 +277,6 @@ def train(args):
                     f"Eval - Loss: {eval_scores['loss']:.4f}, "
                     f"Acc: {eval_scores['accuracy']:.2f}"
                 )
-                if wandb:
-                    wandb.log(
-                        {
-                            "eval/loss": eval_scores["loss"],
-                            "eval/accuracy": eval_scores["accuracy"],
-                            "step": global_step,
-                        }
-                    )
                 if eval_scores["accuracy"] > best_acc:
                     best_acc = eval_scores["accuracy"]
 
@@ -362,14 +284,6 @@ def train(args):
             f"\nEpoch {epoch + 1}/{args.epochs} Summary: "
             f"Loss {avg_loss:.4f}, Acc {acc:.2f}%"
         )
-        if wandb:
-            wandb.log(
-                {
-                    "epoch/loss": avg_loss,
-                    "epoch/accuracy": acc,
-                    "epoch": epoch + 1,
-                }
-            )
 
         total_loss = 0.0
         total_correct = 0
@@ -397,14 +311,6 @@ def train(args):
     logger.info(
         f"MR Test - Loss: {test_scores['loss']:.4f}, Acc: {test_scores['accuracy']:.2f}"
     )
-    if wandb:
-        wandb.log(
-            {
-                "test/loss": test_scores["loss"],
-                "test/accuracy": test_scores["accuracy"],
-            }
-        )
-        wandb.finish()
 
 
 def parse_args():
@@ -459,13 +365,6 @@ def parse_args():
     parser.add_argument("--eval_steps", type=int, default=500,
                         help="Evaluate on validation set every N steps")
     # Checkpoint saving disabled by default for MR training
-
-    parser.add_argument("--wandb", action="store_true",
-                        help="Log training metrics to Weights & Biases")
-    parser.add_argument("--wandb_project", type=str, default="sbert-mr",
-                        help="W&B project name")
-    parser.add_argument("--run_name", type=str, default=None,
-                        help="W&B run name (default: auto-generated)")
 
     args = parser.parse_args()
 

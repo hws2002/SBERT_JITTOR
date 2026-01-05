@@ -1,8 +1,8 @@
 """
-Evaluate SBERTJittor bi-encoder on STS datasets (cosine similarity).
-
-Supports loading a pretrained encoder checkpoint.
+Evaluate a trained SBERT checkpoint on STS-style datasets.
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -11,12 +11,13 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, List
 
 import numpy as np
 import jittor as jt
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
+from datasets import load_from_disk
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -24,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from model.sbert_model import SBERTJittor
 from utils.data_loader import collate_sts, prepare_sts_dataset
+from utils.jittor_batch import _to_jittor_batch
 
 logging.basicConfig(
     format="%(asctime)s - %(message)s",
@@ -51,38 +53,17 @@ MODEL_DIR_MAP = {
 }
 
 
-def _jt_array(data, dtype: str):
-    return jt.array(np.asarray(data, dtype=dtype))
+def _safe_model_id(model_name: str) -> str:
+    return model_name.replace("/", "_")
 
 
-def _to_jittor_batch(batch: Dict[str, Iterable]) -> Dict[str, jt.Var]:
-    out: Dict[str, jt.Var] = {
-        "input_ids_a": _jt_array(batch["input_ids_a"], "int32"),
-        "attention_mask_a": _jt_array(batch["attention_mask_a"], "float32"),
-        "input_ids_b": _jt_array(batch["input_ids_b"], "int32"),
-        "attention_mask_b": _jt_array(batch["attention_mask_b"], "float32"),
-        "scores": _jt_array(batch["scores"], "float32"),
-    }
-
-    if "token_type_ids_a" in batch:
-        out["token_type_ids_a"] = _jt_array(batch["token_type_ids_a"], "int32")
-    if "token_type_ids_b" in batch:
-        out["token_type_ids_b"] = _jt_array(batch["token_type_ids_b"], "int32")
-
-    return out
+def _cache_path(cache_dir: str, dataset_name: str, split: str, model_name: str, max_length: int) -> str:
+    model_id = _safe_model_id(model_name)
+    name = f"{dataset_name}_{split}_{model_id}_len{max_length}"
+    return os.path.join(cache_dir, name)
 
 
-def _resolve_model_dir(base_model: str, model_root: str) -> str:
-    if os.path.isdir(base_model):
-        return base_model
-    mapped = MODEL_DIR_MAP.get(base_model, base_model)
-    candidate = os.path.join(model_root, mapped)
-    if os.path.isdir(candidate):
-        return candidate
-    return base_model
-
-
-def evaluate_sbert(
+def evaluate_dataset(
     model,
     tokenizer,
     data_dir: str,
@@ -94,10 +75,17 @@ def evaluate_sbert(
     tokenize_batch_size: int,
     batch_size: int,
     num_workers: int,
+    require_cache: bool,
 ):
     from scipy.stats import pearsonr, spearmanr
 
     start_time = time.time()
+    cache_path = _cache_path(cache_dir, dataset_name, split, tokenizer.name_or_path, max_length)
+    if require_cache and not os.path.isdir(cache_path):
+        raise FileNotFoundError(
+            f"Missing cached dataset at {cache_path}. "
+            "Generate caches first or disable --require_cache."
+        )
     sts_dataset = prepare_sts_dataset(
         data_dir=data_dir,
         dataset_name=dataset_name,
@@ -122,7 +110,7 @@ def evaluate_sbert(
     model.eval()
     with jt.no_grad():
         for batch in dataloader:
-            jt_batch = _to_jittor_batch(batch)
+            jt_batch = _to_jittor_batch(batch, for_sts=True)
             emb_a = model.encode(
                 jt_batch["input_ids_a"],
                 jt_batch["attention_mask_a"],
@@ -154,23 +142,58 @@ def evaluate_sbert(
     }
 
 
+def evaluate_dataset_torch(
+    model,
+    data_dir: str,
+    dataset_name: str,
+    split: str,
+    batch_size: int,
+):
+    from scipy.stats import pearsonr, spearmanr
+
+    start_time = time.time()
+    raw_ds = load_from_disk(os.path.join(data_dir, dataset_name))[split]
+    sentences1 = raw_ds["sentence1"]
+    sentences2 = raw_ds["sentence2"]
+    scores = np.asarray(raw_ds["score"], dtype=np.float32)
+
+    emb_a = model.encode(sentences1, batch_size=batch_size, show_progress_bar=False)
+    emb_b = model.encode(sentences2, batch_size=batch_size, show_progress_bar=False)
+
+    denom = np.linalg.norm(emb_a, axis=1) * np.linalg.norm(emb_b, axis=1) + 1e-9
+    sim = np.sum(emb_a * emb_b, axis=1) / denom
+
+    pearson_corr, _ = pearsonr(sim, scores)
+    spearman_corr, _ = spearmanr(sim, scores)
+
+    elapsed = time.time() - start_time
+    return {
+        "pearson": pearson_corr * 100,
+        "spearman": spearman_corr * 100,
+        "n_samples": len(raw_ds),
+        "eval_time": elapsed,
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Evaluate SBERTJittor on STS datasets",
+        description="Evaluate a trained SBERT checkpoint on STS datasets",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    parser.add_argument("--checkpoint_path", type=str, required=True,
+                        help="Path to a saved Jittor checkpoint (.pkl)")
     parser.add_argument("--base_model", type=str, default="bert-base-uncased",
                         help="Base encoder model name")
-    parser.add_argument("--model_root", type=str, default="./hf",
-                        help="Root directory containing local models/tokenizers")
-    parser.add_argument("--encoder_checkpoint", type=str, default=None,
-                        help="Optional pretrained encoder checkpoint (.bin/.pt)")
-    parser.add_argument("--jittor_checkpoint", type=str, default=None,
-                        help="Optional Jittor checkpoint (.pkl) with model_state")
+    parser.add_argument("--framework", type=str, default="jittor",
+                        choices=["jittor", "torch"],
+                        help="Evaluation framework")
+    parser.add_argument("--encoder_checkpoint_path", type=str, default="./hf",
+                        help="Base directory containing local models/tokenizers")
     parser.add_argument("--pooling", type=str, default="mean",
                         choices=["mean", "cls", "max"],
                         help="Pooling strategy")
-
+    parser.add_argument("--num_labels", type=int, default=3,
+                        help="Number of NLI classification labels")
     parser.add_argument("--data_dir", type=str, default="./data",
                         help="Directory containing datasets")
     parser.add_argument("--cache_dir", type=str, default="./data/tokenized",
@@ -187,78 +210,70 @@ def parse_args():
                         help="DataLoader worker processes")
     parser.add_argument("--use_cuda", action="store_true",
                         help="Use CUDA if available")
+    parser.add_argument("--require_cache", action="store_true",
+                        help="Require pre-tokenized cache (no tokenization during eval)")
 
     parser.add_argument(
         "--datasets",
         type=str,
         nargs="+",
-        default=["stsb"],
+        default=["all"],
         choices=["all", "sts12", "sts13", "sts14", "sts15", "sts16", "stsb", "sick-r"],
-        help="Datasets to evaluate (default: stsb)",
+        help="Datasets to evaluate (default: all)",
     )
     parser.add_argument("--split", type=str, default="test",
                         help="Split to evaluate (STS-B supports validation/test)")
     parser.add_argument("--output_json", type=str, default=None,
-                        help="Path to write JSON results (default: ./result/eval_sbert_<timestamp>.json)")
-    parser.add_argument("--wandb", action="store_true",
-                        help="Log evaluation results to Weights & Biases")
-    parser.add_argument("--wandb_project", type=str, default="sbert_evaluation",
-                        help="W&B project name")
-    parser.add_argument("--run_name", type=str, default=None,
-                        help="W&B run name (default: auto-generated)")
-
+                        help="Path to write JSON results (default: ./result/eval_<timestamp>.json)")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
-    if args.use_cuda and jt.has_cuda:
-        jt.flags.use_cuda = 1
-        logger.info("Using CUDA")
-    else:
-        jt.flags.use_cuda = 0
-        logger.info("Using CPU")
-
-    model_dir = _resolve_model_dir(args.base_model, args.model_root)
-    logger.info(f"Loading tokenizer from: {model_dir}")
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
-
-    wandb = None
-    if args.wandb:
-        try:
-            import wandb as _wandb
-
-            run_name = args.run_name if args.run_name else f"eval-sbert-{args.base_model}-{args.pooling}"
-            _wandb.init(
-                project=args.wandb_project,
-                name=run_name,
-                config={
-                    "model": args.base_model,
-                    "pooling": args.pooling,
-                    "batch_size": args.batch_size,
-                    "max_length": args.max_length,
-                    "split": args.split,
-                    "datasets": args.datasets,
-                },
-            )
-            wandb = _wandb
-            logger.info(f"W&B initialized: {args.wandb_project}/{run_name}")
-        except ImportError:
-            logger.warning("wandb not installed. Skipping W&B logging.")
-
-    model = SBERTJittor(
-        encoder_name=args.base_model,
-        pooling=args.pooling,
-        head_type="none",
-        checkpoint_path=args.encoder_checkpoint,
-    )
-    if args.jittor_checkpoint:
-        payload = jt.load(args.jittor_checkpoint)
-        if isinstance(payload, dict) and "model_state" in payload:
-            model.load_state_dict(payload["model_state"])
+    if args.framework == "jittor":
+        if args.use_cuda and jt.has_cuda:
+            jt.flags.use_cuda = 1
+            logger.info("Using CUDA")
         else:
-            model.load_state_dict(payload)
+            jt.flags.use_cuda = 0
+            logger.info("Using CPU")
+
+    tokenizer = None
+    model = None
+    if args.framework == "jittor":
+        tokenizer_source = args.base_model
+        if not os.path.isdir(tokenizer_source):
+            mapped = MODEL_DIR_MAP.get(args.base_model, args.base_model)
+            candidate = os.path.join(args.encoder_checkpoint_path, mapped)
+            if os.path.isdir(candidate):
+                tokenizer_source = candidate
+        if not os.path.isdir(tokenizer_source):
+            raise ValueError(
+                "Tokenizer not found locally. Provide a local base_model directory "
+                "or place it under --encoder_checkpoint_path."
+            )
+        logger.info(f"Loading tokenizer from: {tokenizer_source}")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
+
+        logger.info("Loading checkpoint...")
+        checkpoint = jt.load(args.checkpoint_path)
+        model = SBERTJittor(
+            encoder_name=args.base_model,
+            pooling=args.pooling,
+            head_type="none",
+            checkpoint_path=None,
+        )
+        model.load_state_dict(checkpoint["model_state"])
+    else:
+        from sentence_transformers import SentenceTransformer
+
+        model_path = args.checkpoint_path
+        logger.info(f"Loading sentence-transformers model from: {model_path}")
+        model = SentenceTransformer(
+            model_path,
+            device="cuda" if args.use_cuda else "cpu",
+        )
 
     dataset_keys = args.datasets
     if "all" in dataset_keys:
@@ -272,31 +287,39 @@ def main():
             split = "test"
 
         logger.info(f"Evaluating {dataset_name} ({split})...")
-        scores = evaluate_sbert(
-            model=model,
-            tokenizer=tokenizer,
-            data_dir=args.data_dir,
-            dataset_name=dataset_name,
-            split=split,
-            max_length=args.max_length,
-            cache_dir=args.cache_dir,
-            overwrite_cache=args.overwrite_cache,
-            tokenize_batch_size=args.tokenize_batch_size,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-        )
+        if args.framework == "jittor":
+            scores = evaluate_dataset(
+                model=model,
+                tokenizer=tokenizer,
+                data_dir=args.data_dir,
+                dataset_name=dataset_name,
+                split=split,
+                max_length=args.max_length,
+                cache_dir=args.cache_dir,
+                overwrite_cache=args.overwrite_cache,
+                tokenize_batch_size=args.tokenize_batch_size,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                require_cache=args.require_cache,
+            )
+        else:
+            scores = evaluate_dataset_torch(
+                model=model,
+                data_dir=args.data_dir,
+                dataset_name=dataset_name,
+                split=split,
+                batch_size=args.batch_size,
+            )
         results[dataset_name] = scores
         logger.info(
             f"{dataset_name} - Pearson: {scores['pearson']:.2f}, Spearman: {scores['spearman']:.2f}"
         )
-
     avg_pearson = sum(v["pearson"] for v in results.values()) / max(len(results), 1)
     avg_spearman = sum(v["spearman"] for v in results.values()) / max(len(results), 1)
 
     payload = {
         "model_info": {
             "model_name": args.base_model,
-            "pooling": args.pooling,
             "max_length": args.max_length,
         },
         "evaluation": {
@@ -327,7 +350,8 @@ def main():
     if output_path is None:
         output_dir = Path("./result")
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"eval_sbert_{payload['timestamp']}.json"
+        safe_model = args.base_model.replace("/", "_")
+        output_path = output_dir / f"eval_{safe_model}_{payload['timestamp']}.json"
     else:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -336,19 +360,6 @@ def main():
         json.dump(payload, handle, ensure_ascii=True, indent=2)
 
     logger.info(f"Evaluation complete. Results saved to {output_path}")
-    if wandb:
-        dataset_metrics = {}
-        for name, scores in results.items():
-            key = name.lower().replace("sts-", "sts").replace("-b", "b")
-            dataset_metrics[f"{key}/pearson"] = scores["pearson"]
-            dataset_metrics[f"{key}/spearman"] = scores["spearman"]
-            dataset_metrics[f"{key}/n_samples"] = scores["n_samples"]
-            dataset_metrics[f"{key}/eval_time"] = scores["eval_time"]
-        dataset_metrics["avg/pearson"] = avg_pearson
-        dataset_metrics["avg/spearman"] = avg_spearman
-        dataset_metrics["avg/n_datasets"] = len(results)
-        wandb.log(dataset_metrics)
-        wandb.finish()
 
 
 if __name__ == "__main__":

@@ -5,15 +5,10 @@ Inspired by: https://github.com/UKPLab/sentence-transformers/blob/master/example
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
-import time
 from pathlib import Path
-from typing import Dict, Iterable
-
-import numpy as np
 import jittor as jt
 from jittor import nn
 from tqdm import tqdm
@@ -24,11 +19,19 @@ from model.sbert_model import SBERTJittor
 from losses.softmax_loss import SoftmaxLoss
 from losses.complex_softmax_loss import ComplexSoftmaxLoss
 from utils.data_loader import prepare_nli_dataset, prepare_sts_dataset, collate_nli, collate_sts
+from utils.jittor_batch import _to_jittor_batch
+from utils.jittor_utils import setup_device
+from utils.checkpoint_utils import (
+    load_training_checkpoint_encoder_only as load_training_checkpoint,
+    save_checkpoint_encoder_only as save_checkpoint,
+    save_encoder_only,
+)
 from utils.training_utils import (
     TrainConfig,
     checkpoint_path,
     safe_model_name,
 )
+from evaluation.sts_eval_utils import evaluate_sts, evaluate_sts_all, save_eval_results_multi
 
 # Set the log level to INFO
 logging.basicConfig(
@@ -39,268 +42,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-STS_DATASETS = ["STS-12", "STS-13", "STS-14", "STS-15", "STS-16", "STS-B", "SICKR"]
-
-
-def _jt_array(data, dtype: str):
-    return jt.array(np.asarray(data, dtype=dtype))
-
-
-def _to_jittor_batch(batch: Dict[str, Iterable], for_sts: bool = False) -> Dict[str, jt.Var]:
-    """Convert a numpy batch to Jittor arrays."""
-    out: Dict[str, jt.Var] = {
-        "input_ids_a": _jt_array(batch["input_ids_a"], "int32"),
-        "attention_mask_a": _jt_array(batch["attention_mask_a"], "float32"),
-        "input_ids_b": _jt_array(batch["input_ids_b"], "int32"),
-        "attention_mask_b": _jt_array(batch["attention_mask_b"], "float32"),
-    }
-
-    if "token_type_ids_a" in batch:
-        out["token_type_ids_a"] = _jt_array(batch["token_type_ids_a"], "int32")
-    if "token_type_ids_b" in batch:
-        out["token_type_ids_b"] = _jt_array(batch["token_type_ids_b"], "int32")
-
-    if for_sts:
-        out["scores"] = _jt_array(batch["scores"], "float32")
-    else:
-        out["labels"] = _jt_array(batch["labels"], "int32")
-
-    return out
-
-
-def evaluate_sts(model, dataloader):
-    import numpy as np
-    from scipy.stats import pearsonr, spearmanr
-
-    logger.info("Evaluating on STS-B...")
-    model.eval()
-
-    all_predictions = []
-    all_scores = []
-
-    with jt.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating STS-B", leave=False):
-            jt_batch = _to_jittor_batch(batch, for_sts=True)
-
-            emb_a = model.encode(
-                jt_batch["input_ids_a"],
-                jt_batch["attention_mask_a"],
-                jt_batch.get("token_type_ids_a", None)
-            )
-            emb_b = model.encode(
-                jt_batch["input_ids_b"],
-                jt_batch["attention_mask_b"],
-                jt_batch.get("token_type_ids_b", None)
-            )
-
-            emb_a_np = emb_a.numpy()
-            emb_b_np = emb_b.numpy()
-            if emb_a_np.ndim == 1:
-                emb_a_np = emb_a_np.reshape(1, -1)
-            if emb_b_np.ndim == 1:
-                emb_b_np = emb_b_np.reshape(1, -1)
-            denom = np.linalg.norm(emb_a_np, axis=1) * np.linalg.norm(emb_b_np, axis=1) + 1e-9
-            sim = np.sum(emb_a_np * emb_b_np, axis=1) / denom
-
-            scores_np = jt_batch["scores"].numpy().reshape(-1)
-            sim_np = np.asarray(sim).reshape(-1)
-            if sim_np.shape[0] != scores_np.shape[0]:
-                logger.warning(
-                    f"STS eval length mismatch (pred {sim_np.shape[0]} vs scores {scores_np.shape[0]}). "
-                    "Recomputing per-sample."
-                )
-                preds = []
-                for idx in range(scores_np.shape[0]):
-                    emb_a_i = model.encode(
-                        jt_batch["input_ids_a"][idx:idx + 1],
-                        jt_batch["attention_mask_a"][idx:idx + 1],
-                        jt_batch.get("token_type_ids_a", None)[idx:idx + 1]
-                        if "token_type_ids_a" in jt_batch else None,
-                    )
-                    emb_b_i = model.encode(
-                        jt_batch["input_ids_b"][idx:idx + 1],
-                        jt_batch["attention_mask_b"][idx:idx + 1],
-                        jt_batch.get("token_type_ids_b", None)[idx:idx + 1]
-                        if "token_type_ids_b" in jt_batch else None,
-                    )
-                    emb_a_i = emb_a_i.numpy().reshape(1, -1)
-                    emb_b_i = emb_b_i.numpy().reshape(1, -1)
-                    denom_i = np.linalg.norm(emb_a_i, axis=1) * np.linalg.norm(emb_b_i, axis=1) + 1e-9
-                    sim_i = np.sum(emb_a_i * emb_b_i, axis=1) / denom_i
-                    preds.append(float(sim_i[0]))
-                sim_np = np.asarray(preds)
-            all_predictions.extend(sim_np.tolist())
-            all_scores.extend(scores_np.tolist())
-
-    pearson_corr, _ = pearsonr(all_predictions, all_scores)
-    spearman_corr, _ = spearmanr(all_predictions, all_scores)
-
-    results = {
-        "pearson": pearson_corr * 100,
-        "spearman": spearman_corr * 100,
-    }
-
-    logger.info(f"STS-B - Pearson: {results['pearson']:.2f}, Spearman: {results['spearman']:.2f}")
-    model.train()
-    return results
-
-
-def evaluate_sts_all(
-    model,
-    tokenizer,
-    data_dir: str,
-    cache_dir: str,
-    max_length: int,
-    overwrite_cache: bool,
-    tokenize_batch_size: int,
-    eval_batch_size: int,
-    num_workers: int,
-):
-    all_results = {}
-    for dataset_name in STS_DATASETS:
-        split = "test"
-        sts_dataset = prepare_sts_dataset(
-            data_dir=data_dir,
-            dataset_name=dataset_name,
-            split=split,
-            tokenizer=tokenizer,
-            max_length=max_length,
-            cache_dir=cache_dir,
-            overwrite_cache=overwrite_cache,
-            tokenize_batch_size=tokenize_batch_size,
-        )
-        sts_dataloader = DataLoader(
-            sts_dataset,
-            batch_size=eval_batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            collate_fn=collate_sts,
-        )
-        logger.info(f"Evaluating {dataset_name} ({split})...")
-        scores = evaluate_sts(model=model, dataloader=sts_dataloader)
-        all_results[dataset_name] = {
-            "split": split,
-            "pearson": scores["pearson"],
-            "spearman": scores["spearman"],
-            "n_samples": len(sts_dataset),
-        }
-    return all_results
-
-
-def save_eval_results(
-    results: Dict[str, Dict[str, float]],
-    args,
-    output_dir: Path,
-):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    safe_model = safe_model_name(args.base_model)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_path = output_dir / f"eval_{safe_model}_{timestamp}.json"
-
-    avg_pearson = sum(v["pearson"] for v in results.values()) / max(len(results), 1)
-    avg_spearman = sum(v["spearman"] for v in results.values()) / max(len(results), 1)
-
-    payload = {
-        "model_info": {
-            "type": "sbert_jittor",
-            "model_name": safe_model,
-            "max_length": args.max_length,
-        },
-        "evaluation": {
-            "split": "test",
-            "batch_size": args.eval_batch_size,
-            "device": "cuda" if jt.flags.use_cuda else "cpu",
-        },
-        "results": [
-            {
-                "dataset": name.lower().replace("sts-", "sts").replace("-b", "b"),
-                "split": info["split"],
-                "pearson": info["pearson"],
-                "spearman": info["spearman"],
-                "n_samples": info["n_samples"],
-            }
-            for name, info in results.items()
-        ],
-        "average": {
-            "pearson": avg_pearson,
-            "spearman": avg_spearman,
-            "n_datasets": len(results),
-        },
-        "timestamp": timestamp,
-    }
-
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=True, indent=2)
-
-    logger.info(f"Saved evaluation results to {output_path}")
-    return payload, output_path
-
-def setup_device(use_cuda):
-    if use_cuda and jt.has_cuda:
-        jt.flags.use_cuda = 1
-        logger.info("Using CUDA")
-    else:
-        jt.flags.use_cuda = 0
-        logger.info("Using CPU")
-
 
 def _filtered_loss_state(train_loss):
     loss_state = train_loss.state_dict()
     return {k: v for k, v in loss_state.items() if not k.startswith("model.")}
-
-
-def save_checkpoint(model, train_loss, optimizer, iteration, epoch, args, name="checkpoint"):
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    if name == "best":
-        path = checkpoint_path(output_dir, args.base_model, "best")
-    else:
-        logger.info("Skipping non-best checkpoint save (encoder-only mode).")
-        return None
-
-    checkpoint = {
-        "model_state": model.state_dict(),
-        "base_model": args.base_model,
-        "pooling": args.pooling,
-    }
-
-    jt.save(checkpoint, str(path))
-    logger.info(f"Checkpoint saved: {path}")
-    return path
-
-
-def save_encoder_only(model, args, output_dir: Path, name: str):
-    payload = {
-        "model_state": model.state_dict(),
-        "base_model": args.base_model,
-        "pooling": args.pooling,
-    }
-    checkpoint_path = output_dir / f"{name}.pkl"
-    jt.save(payload, str(checkpoint_path))
-    logger.info(f"Encoder-only checkpoint saved: {checkpoint_path}")
-    return checkpoint_path
-
-
-def load_training_checkpoint(model, train_loss, optimizer, checkpoint_path: str) -> tuple[int, int]:
-    logger.info(f"Loading training checkpoint: {checkpoint_path}")
-    checkpoint = jt.load(checkpoint_path)
-    model.load_state_dict(checkpoint["model_state"])
-    if "loss_state" in checkpoint:
-        try:
-            train_loss.load_state_dict(checkpoint["loss_state"])
-        except Exception as exc:
-            logger.warning(f"Partial loss_state load (expected): {exc}")
-    if optimizer is not None and "optimizer_state" in checkpoint:
-        try:
-            optimizer.load_state_dict(checkpoint["optimizer_state"])
-        except Exception as exc:
-            logger.warning(f"Failed to load optimizer state: {exc}")
-
-    global_step = int(checkpoint.get("iteration", 0))
-    start_epoch = max(int(checkpoint.get("epoch", 1)) - 1, 0)
-    logger.info(f"Resuming from step {global_step}, epoch {start_epoch + 1}")
-    return global_step, start_epoch
 
 
 def train(args):
@@ -468,24 +213,8 @@ def train(args):
                     f"LR: {current_lr:.2e}"
                 )
 
-                if wandb:
-                    wandb.log({
-                        "train/loss": loss.item(),
-                        "train/avg_loss": avg_loss,
-                        "train/accuracy": accuracy,
-                        "train/lr": current_lr,
-                        "step": global_step,
-                    })
-
             if global_step % args.eval_steps == 0:
                 eval_results = evaluate_sts(model=model, dataloader=sts_dataloader)
-
-                if wandb:
-                    wandb.log({
-                        "eval/pearson": eval_results["pearson"],
-                        "eval/spearman": eval_results["spearman"],
-                        "step": global_step,
-                    })
 
                 if eval_results["spearman"] > best_spearman:
                     best_spearman = eval_results["spearman"]
@@ -501,13 +230,6 @@ def train(args):
         logger.info(f"  Average Loss: {avg_loss:.4f}")
         logger.info(f"  Accuracy: {accuracy:.2f}%")
         logger.info(f"  Total Steps: {global_step}")
-
-        if wandb:
-            wandb.log({
-                "epoch/loss": avg_loss,
-                "epoch/accuracy": accuracy,
-                "epoch": epoch + 1,
-            })
 
         total_loss = 0.0
         total_correct = 0
@@ -544,12 +266,6 @@ def train(args):
 
     test_results = evaluate_sts(model=model, dataloader=sts_test_dataloader)
 
-    if wandb:
-        wandb.log({
-            "test/pearson": test_results["pearson"],
-            "test/spearman": test_results["spearman"],
-        })
-
     logger.info("\n" + "=" * 70)
     logger.info("Training completed!")
     logger.info(f"Best Spearman score (dev): {best_spearman:.2f}")
@@ -577,7 +293,7 @@ def train(args):
         eval_batch_size=args.eval_batch_size,
         num_workers=args.num_workers,
     )
-    payload, output_path = save_eval_results(all_results, args, Path(args.output_dir) / "result")
+    payload, output_path = save_eval_results_multi(all_results, args, Path(args.output_dir) / "result")
 
 
 def parse_args():

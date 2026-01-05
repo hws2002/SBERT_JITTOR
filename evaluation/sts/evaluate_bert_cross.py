@@ -239,13 +239,6 @@ def parse_args():
                         help="Split to evaluate (STS-B supports validation/test)")
     parser.add_argument("--output_json", type=str, default=None,
                         help="Path to write JSON results (default: ./result/eval_bert_sts_<timestamp>.json)")
-    parser.add_argument("--wandb", action="store_true",
-                        help="Log evaluation results to Weights & Biases")
-    parser.add_argument("--wandb_project", type=str, default="sbert_evaluation",
-                        help="W&B project name")
-    parser.add_argument("--run_name", type=str, default=None,
-                        help="W&B run name (default: auto-generated)")
-
     return parser.parse_args()
 
 
@@ -262,29 +255,6 @@ def main():
         logger.info(f"Loading classifier head from: {args.head_checkpoint}")
         _load_head_weights(model, args.head_checkpoint)
     model.to(device)
-
-    wandb = None
-    if args.wandb:
-        try:
-            import wandb as _wandb
-
-            run_name = args.run_name if args.run_name else f"eval-bert-cross-{Path(args.model_path).name}"
-            _wandb.init(
-                project=args.wandb_project,
-                name=run_name,
-                config={
-                    "mode": "cross",
-                    "model_path": args.model_path,
-                    "batch_size": args.batch_size,
-                    "max_length": args.max_length,
-                    "split": args.split,
-                    "datasets": args.datasets,
-                },
-            )
-            wandb = _wandb
-            logger.info(f"W&B initialized: {args.wandb_project}/{run_name}")
-        except ImportError:
-            logger.warning("wandb not installed. Skipping W&B logging.")
 
     dataset_keys = args.datasets
     if "all" in dataset_keys:
@@ -363,19 +333,6 @@ def main():
         json.dump(payload, handle, ensure_ascii=True, indent=2)
 
     logger.info(f"Evaluation complete. Results saved to {output_path}")
-    if wandb:
-        dataset_metrics = {}
-        for name, scores in results.items():
-            key = name.lower().replace("sts-", "sts").replace("-b", "b")
-            dataset_metrics[f"{key}/pearson"] = scores["pearson"]
-            dataset_metrics[f"{key}/spearman"] = scores["spearman"]
-            dataset_metrics[f"{key}/n_samples"] = scores["n_samples"]
-            dataset_metrics[f"{key}/eval_time"] = scores["eval_time"]
-        dataset_metrics["avg/pearson"] = avg_pearson
-        dataset_metrics["avg/spearman"] = avg_spearman
-        dataset_metrics["avg/n_datasets"] = len(results)
-        wandb.log(dataset_metrics)
-        wandb.finish()
 
 
 if __name__ == "__main__":

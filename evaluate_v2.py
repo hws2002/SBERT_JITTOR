@@ -11,8 +11,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Iterable
-
 import numpy as np
 import jittor as jt
 from torch.utils.data import DataLoader
@@ -24,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from model.sbert_model import SBERTJittor
 from utils.data_loader import collate_sts, prepare_sts_dataset
+from utils.jittor_batch import _to_jittor_batch
 
 logging.basicConfig(
     format="%(asctime)s - %(message)s",
@@ -48,27 +47,6 @@ MODEL_DIR_MAP = {
     "bert-large-uncased": "hf_bert_large",
     "bert-base-uncased": "hf_bert_base",
 }
-
-
-def _jt_array(data, dtype: str):
-    return jt.array(np.asarray(data, dtype=dtype))
-
-
-def _to_jittor_batch(batch: Dict[str, Iterable]) -> Dict[str, jt.Var]:
-    out: Dict[str, jt.Var] = {
-        "input_ids_a": _jt_array(batch["input_ids_a"], "int32"),
-        "attention_mask_a": _jt_array(batch["attention_mask_a"], "float32"),
-        "input_ids_b": _jt_array(batch["input_ids_b"], "int32"),
-        "attention_mask_b": _jt_array(batch["attention_mask_b"], "float32"),
-        "scores": _jt_array(batch["scores"], "float32"),
-    }
-
-    if "token_type_ids_a" in batch:
-        out["token_type_ids_a"] = _jt_array(batch["token_type_ids_a"], "int32")
-    if "token_type_ids_b" in batch:
-        out["token_type_ids_b"] = _jt_array(batch["token_type_ids_b"], "int32")
-
-    return out
 
 
 def evaluate_dataset(
@@ -113,7 +91,7 @@ def evaluate_dataset(
     model.eval()
     with jt.no_grad():
         for batch in dataloader:
-            jt_batch = _to_jittor_batch(batch)
+            jt_batch = _to_jittor_batch(batch, for_sts=True)
             emb_a = model.encode(
                 jt_batch["input_ids_a"],
                 jt_batch["attention_mask_a"],
@@ -222,13 +200,6 @@ def parse_args():
                         help="Split to evaluate (STS-B supports validation/test)")
     parser.add_argument("--output_json", type=str, default=None,
                         help="Path to write JSON results (default: ./result/eval_<timestamp>.json)")
-    parser.add_argument("--wandb", action="store_true",
-                        help="Log evaluation results to Weights & Biases")
-    parser.add_argument("--wandb_project", type=str, default="sbert_evaluation",
-                        help="W&B project name")
-    parser.add_argument("--run_name", type=str, default=None,
-                        help="W&B run name (default: auto-generated)")
-
     return parser.parse_args()
 
 
@@ -241,29 +212,6 @@ def main():
     else:
         jt.flags.use_cuda = 0
         logger.info("Using CPU")
-
-    wandb = None
-    if args.wandb:
-        try:
-            import wandb as _wandb
-
-            run_name = args.run_name if args.run_name else f"eval-{args.base_model}"
-            _wandb.init(
-                project=args.wandb_project,
-                name=run_name,
-                config={
-                    "model": args.base_model,
-                    "pooling": args.pooling,
-                    "batch_size": args.batch_size,
-                    "max_length": args.max_length,
-                    "split": args.split,
-                    "datasets": args.datasets,
-                },
-            )
-            wandb = _wandb
-            logger.info(f"W&B initialized: {args.wandb_project}/{run_name}")
-        except ImportError:
-            logger.warning("wandb not installed. Skipping W&B logging.")
 
     tokenizer_source = args.tokenizer_dir or args.base_model
     if not os.path.isdir(tokenizer_source):
@@ -366,19 +314,6 @@ def main():
         json.dump(payload, handle, ensure_ascii=True, indent=2)
 
     logger.info(f"Evaluation complete. Results saved to {output_path}")
-    if wandb:
-        dataset_metrics = {}
-        for name, scores in results.items():
-            key = name.lower().replace("sts-", "sts").replace("-b", "b")
-            dataset_metrics[f"{key}/pearson"] = scores["pearson"]
-            dataset_metrics[f"{key}/spearman"] = scores["spearman"]
-            dataset_metrics[f"{key}/n_samples"] = scores["n_samples"]
-            dataset_metrics[f"{key}/eval_time"] = scores["eval_time"]
-        dataset_metrics["avg/pearson"] = avg_pearson
-        dataset_metrics["avg/spearman"] = avg_spearman
-        dataset_metrics["avg/n_datasets"] = len(results)
-        wandb.log(dataset_metrics)
-        wandb.finish()
 
 
 if __name__ == "__main__":

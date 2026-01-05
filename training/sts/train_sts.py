@@ -1,9 +1,5 @@
 """
-Train SBERT on STS-style regression tasks (GPU-optimized pipeline).
-
-This script mirrors the structure of ``train_nli_gpu.py`` but swaps the
-classification loss for the cosine-similarity regression setup used on
-STS Benchmark and related datasets.
+Train SBERT on STS-style regression tasks.
 """
 
 import argparse
@@ -13,9 +9,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Iterable
-
-import numpy as np
 import jittor as jt
 from jittor import nn
 from tqdm import tqdm
@@ -25,11 +18,17 @@ from jittor.dataset import DataLoader
 from model.sbert_model import SBERTJittor
 from losses.regression_loss import RegressionLoss
 from utils.data_loader import prepare_sts_dataset, collate_sts
+from utils.jittor_batch import _to_jittor_batch
+from utils.jittor_utils import setup_device
+from utils.checkpoint_utils import (
+    load_training_checkpoint_with_optimizer as load_training_checkpoint,
+    save_checkpoint_with_optimizer as save_checkpoint,
+)
 from utils.training_utils import (
     TrainConfig,
     checkpoint_path,
-    safe_model_name,
 )
+from evaluation.sts_eval_utils import evaluate_sts, save_eval_results_single
 
 
 logging.basicConfig(
@@ -40,179 +39,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-
-def _jt_array(data, dtype: str):
-    return jt.array(np.asarray(data, dtype=dtype))
-
-
-def _to_jittor_batch(batch: Dict[str, Iterable]) -> Dict[str, jt.Var]:
-    out: Dict[str, jt.Var] = {
-        "input_ids_a": _jt_array(batch["input_ids_a"], "int32"),
-        "attention_mask_a": _jt_array(batch["attention_mask_a"], "float32"),
-        "input_ids_b": _jt_array(batch["input_ids_b"], "int32"),
-        "attention_mask_b": _jt_array(batch["attention_mask_b"], "float32"),
-        "scores": _jt_array(batch["scores"], "float32"),
-    }
-
-    if "token_type_ids_a" in batch:
-        out["token_type_ids_a"] = _jt_array(batch["token_type_ids_a"], "int32")
-    if "token_type_ids_b" in batch:
-        out["token_type_ids_b"] = _jt_array(batch["token_type_ids_b"], "int32")
-    return out
-
-
-def setup_device(use_cuda: bool):
-    if use_cuda and jt.has_cuda:
-        jt.flags.use_cuda = 1
-        logger.info("Using CUDA")
-    else:
-        jt.flags.use_cuda = 0
-        logger.info("Using CPU")
-
-
-def setup_wandb(args):
-    if not args.wandb:
-        return None
-
-    try:
-        import wandb
-
-        if args.run_name:
-            run_name = args.run_name
-        else:
-            suffix = "sts-nli" if args.start_from_checkpoints else "sts-only"
-            run_name = f"sts-{args.base_model.split('/')[-1]}-{args.pooling}-{suffix}"
-        wandb.init(
-            project=args.wandb_project,
-            name=run_name,
-            config={
-                "model": args.base_model,
-                "pooling": args.pooling,
-                "batch_size": args.batch_size,
-                "learning_rate": args.lr,
-                "max_length": args.max_length,
-                "epochs": args.epochs,
-                "train_dataset": args.train_dataset,
-                "train_split": args.train_split,
-                "eval_dataset": args.eval_dataset,
-                "eval_split": args.eval_split,
-                "normalize_scores": args.normalize_scores,
-            },
-        )
-        logger.info(f"W&B initialized: {args.wandb_project}/{run_name}")
-        return wandb
-    except ImportError:
-        logger.warning("wandb not installed. Skipping W&B logging.")
-        return None
-
-
-def evaluate_sts(model, dataloader, normalize_scores: bool = False, score_scale: float = 1.0):
-    from scipy.stats import pearsonr, spearmanr
-
-    model.eval()
-    all_predictions = []
-    all_scores = []
-
-    with jt.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating STS", leave=False):
-            jt_batch = _to_jittor_batch(batch)
-            emb_a = model.encode(
-                jt_batch["input_ids_a"],
-                jt_batch["attention_mask_a"],
-                jt_batch.get("token_type_ids_a", None),
-            )
-            emb_b = model.encode(
-                jt_batch["input_ids_b"],
-                jt_batch["attention_mask_b"],
-                jt_batch.get("token_type_ids_b", None),
-            )
-
-            emb_a_np = emb_a.numpy()
-            emb_b_np = emb_b.numpy()
-            denom = np.linalg.norm(emb_a_np, axis=1) * np.linalg.norm(emb_b_np, axis=1) + 1e-9
-            sim = np.sum(emb_a_np * emb_b_np, axis=1) / denom
-
-            all_predictions.extend(sim.tolist())
-            scores_np = np.asarray(batch["scores"])
-            if normalize_scores and score_scale != 0:
-                scores_np = scores_np / score_scale
-            all_scores.extend(scores_np.tolist())
-
-    pearson_corr, _ = pearsonr(all_predictions, all_scores)
-    spearman_corr, _ = spearmanr(all_predictions, all_scores)
-    model.train()
-    return {
-        "pearson": pearson_corr * 100,
-        "spearman": spearman_corr * 100,
-    }
-
-
-def save_checkpoint(model, optimizer, iteration, epoch, args, name="checkpoint"):
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    if name == "best":
-        path = checkpoint_path(output_dir, args.base_model, "best")
-    else:
-        path = checkpoint_path(output_dir, args.base_model, name)
-
-    checkpoint = {
-        "iteration": iteration,
-        "epoch": epoch,
-        "model_state": model.state_dict(),
-        "base_model": args.base_model,
-        "pooling": args.pooling,
-    }
-
-    jt.save(checkpoint, str(path))
-    logger.info(f"Checkpoint saved: {path}")
-    return path
-
-
-def load_training_checkpoint(model, optimizer, checkpoint_path: str):
-    logger.info(f"Loading training checkpoint: {checkpoint_path}")
-    checkpoint = jt.load(checkpoint_path)
-    model.load_state_dict(checkpoint["model_state"])
-    if optimizer is not None and "optimizer_state" in checkpoint:
-        try:
-            optimizer.load_state_dict(checkpoint["optimizer_state"])
-        except Exception as exc:
-            logger.warning(f"Failed to load optimizer state: {exc}")
-
-    global_step = int(checkpoint.get("iteration", 0))
-    start_epoch = max(int(checkpoint.get("epoch", 1)) - 1, 0)
-    logger.info(f"Resuming from step {global_step}, epoch {start_epoch + 1}")
-    return global_step, start_epoch
-
-
-def save_eval_results(results: Dict[str, float], args, output_dir: Path):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    safe_model = safe_model_name(args.base_model)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_path = output_dir / f"eval_sts_{safe_model}_{timestamp}.json"
-
-    payload = {
-        "model_info": {
-            "type": "sbert_jittor",
-            "model_name": safe_model,
-            "max_length": args.max_length,
-        },
-        "evaluation": {
-            "dataset": args.test_dataset,
-            "split": args.test_split,
-            "batch_size": args.eval_batch_size,
-            "device": "cuda" if jt.flags.use_cuda else "cpu",
-        },
-        "results": results,
-        "timestamp": timestamp,
-    }
-
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-
-    logger.info(f"Saved evaluation results to {output_path}")
-    return output_path
 
 
 def train(args):
@@ -235,8 +61,6 @@ def train(args):
     logger.info("=" * 70)
 
     setup_device(args.use_cuda)
-    wandb = setup_wandb(args)
-
     tokenizer_source = config.tokenizer_path
     logger.info(f"Loading tokenizer from: {tokenizer_source}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
@@ -318,14 +142,6 @@ def train(args):
         f"Initial Eval - Pearson: {eval_results_before['pearson']:.2f}, "
         f"Spearman: {eval_results_before['spearman']:.2f}"
     )
-    if wandb:
-        wandb.log(
-            {
-                "eval/pearson": eval_results_before["pearson"],
-                "eval/spearman": eval_results_before["spearman"],
-                "step": global_step,
-            }
-        )
 
     total_loss = 0.0
     total_samples = 0
@@ -372,14 +188,6 @@ def train(args):
 
             if global_step % args.log_steps == 0:
                 logger.info(f"Step {global_step}/{total_steps} | Loss: {loss.item():.4f} | Avg Loss: {avg_loss:.4f}")
-                if wandb:
-                    wandb.log(
-                        {
-                            "train/loss": loss.item(),
-                            "train/avg_loss": avg_loss,
-                            "step": global_step,
-                        }
-                    )
 
             if global_step % args.eval_steps == 0:
                 eval_results = evaluate_sts(
@@ -392,14 +200,6 @@ def train(args):
                     f"Eval - Pearson: {eval_results['pearson']:.2f}, "
                     f"Spearman: {eval_results['spearman']:.2f}"
                 )
-                if wandb:
-                    wandb.log(
-                        {
-                            "eval/pearson": eval_results["pearson"],
-                            "eval/spearman": eval_results["spearman"],
-                            "step": global_step,
-                        }
-                    )
                 if not args.disable_checkpoint and eval_results["spearman"] > best_spearman:
                     best_spearman = eval_results["spearman"]
                     save_checkpoint(model, optimizer, global_step, epoch + 1, args, name="best")
@@ -408,14 +208,6 @@ def train(args):
         logger.info(f"\nEpoch {epoch + 1}/{args.epochs} Summary:")
         logger.info(f"  Average Loss: {avg_loss:.4f}")
         logger.info(f"  Total Steps: {global_step}")
-
-        if wandb:
-            wandb.log(
-                {
-                    "epoch/loss": avg_loss,
-                    "epoch": epoch + 1,
-                }
-            )
 
         total_loss = 0.0
         total_samples = 0
@@ -458,15 +250,8 @@ def train(args):
         f"STS-B Test - Pearson: {test_results['pearson']:.2f}, "
         f"Spearman: {test_results['spearman']:.2f}"
     )
-    if wandb:
-        wandb.log(
-            {
-                "test/pearson": test_results["pearson"],
-                "test/spearman": test_results["spearman"],
-            }
-        )
 
-    save_eval_results(test_results, args, Path(args.output_dir) / "result")
+    save_eval_results_single(test_results, args, Path(args.output_dir) / "result")
 
     logger.info("\nSaving final model...")
     output_dir = Path(args.output_dir)
@@ -500,10 +285,6 @@ def train(args):
         logger.info(
             "Final model not saved because existing final checkpoint has equal or better Spearman score."
         )
-
-    if wandb:
-        wandb.finish()
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -574,13 +355,6 @@ def parse_args():
                         help="Path to a saved checkpoint to resume training")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory for checkpoints and results")
-
-    parser.add_argument("--wandb", action="store_true",
-                        help="Use Weights & Biases logging")
-    parser.add_argument("--wandb_project", type=str, default="sbert-sts-training",
-                        help="W&B project name")
-    parser.add_argument("--run_name", type=str, default=None,
-                        help="W&B run name (default: auto-generated)")
 
     args = parser.parse_args()
 
