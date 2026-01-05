@@ -53,6 +53,8 @@ class BertConfig:
             initializer_range=0.02,
             layer_norm_eps=1e-12,
             position_embedding_type="absolute",
+            pad_token_id=0,
+            use_token_type_embeddings=True,
             class_weight=None,
     ):
         self.vocab_size = vocab_size
@@ -68,6 +70,8 @@ class BertConfig:
         self.initializer_range = initializer_range
         self.layer_norm_eps = layer_norm_eps
         self.position_embedding_type = position_embedding_type
+        self.pad_token_id = pad_token_id
+        self.use_token_type_embeddings = use_token_type_embeddings
         self.num_labels = 2
         self.class_weight = class_weight
 
@@ -222,6 +226,8 @@ class BertEmbeddings(nn.Module):
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
         self.position_ids = jittor.arange(config.max_position_embeddings).expand((1, 1))
+        self.pad_token_id = getattr(config, "pad_token_id", 0)
+        self.use_token_type_embeddings = getattr(config, "use_token_type_embeddings", True)
 
     def execute(
             self,
@@ -234,14 +240,20 @@ class BertEmbeddings(nn.Module):
         seq_length = input_shape[1]
 
         if position_ids is None:
-            position_ids = self.position_ids[:, :seq_length]
+            if not self.use_token_type_embeddings and input_ids is not None:
+                position_ids = _create_position_ids_from_input_ids(input_ids, self.pad_token_id)
+            else:
+                position_ids = self.position_ids[:, :seq_length]
 
         if token_type_ids is None:
             token_type_ids = jittor.zeros(input_shape)
 
         inputs_embeds = self.word_embeddings(input_ids)
-        token_type_embeddings = self.token_type_embeddings(token_type_ids)
-        embeddings = inputs_embeds + token_type_embeddings
+        if self.use_token_type_embeddings:
+            token_type_embeddings = self.token_type_embeddings(token_type_ids)
+            embeddings = inputs_embeds + token_type_embeddings
+        else:
+            embeddings = inputs_embeds
 
         if self.position_embedding_type == "absolute":
             position_embeddings = self.position_embeddings(position_ids)
@@ -250,6 +262,13 @@ class BertEmbeddings(nn.Module):
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
+
+
+def _create_position_ids_from_input_ids(input_ids, padding_idx: int):
+    # RoBERTa-style position ids: cumsum over non-pad tokens, offset by padding_idx.
+    mask = (input_ids != padding_idx).astype("int32")
+    incremental = jittor.cumsum(mask, dim=1)
+    return incremental * mask + padding_idx
 
 
 class BertEncoder(nn.Module):

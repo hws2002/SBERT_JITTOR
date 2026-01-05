@@ -1,29 +1,9 @@
 """
-Loss functions for SBERT-style objectives.
+Triplet objective for sentence embeddings.
 """
 
 import jittor as jt
 from jittor import nn
-
-
-class RegressionLoss(nn.Module):
-    """
-    Regression objective for STS tasks.
-
-    Computes cosine similarity between u and v, then applies MSE loss
-    against the provided target scores.
-    """
-
-    def __init__(self, eps: float = 1e-9):
-        super().__init__()
-        self.eps = eps
-
-    def execute(self, u: jt.Var, v: jt.Var, targets: jt.Var) -> jt.Var:
-        dot = jt.sum(u * v, dim=1)
-        u_norm = jt.sqrt(jt.sum(u * u, dim=1) + self.eps)
-        v_norm = jt.sqrt(jt.sum(v * v, dim=1) + self.eps)
-        cos_sim = dot / (u_norm * v_norm + self.eps)
-        return jt.mean((cos_sim - targets) ** 2)
 
 
 class TripletLoss(nn.Module):
@@ -32,7 +12,6 @@ class TripletLoss(nn.Module):
 
     Minimizes max(||a - p|| - ||a - n|| + margin, 0) using Euclidean distance.
     """
-
     def __init__(self, margin: float = 1.0, eps: float = 1e-9):
         super().__init__()
         self.margin = margin
