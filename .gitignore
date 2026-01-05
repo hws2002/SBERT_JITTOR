@@ -24,3 +24,4 @@ test.py
 torun.sh
 
 important_checkpoints/
+*.egg-info
