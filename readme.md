@@ -13,6 +13,11 @@ Sentence-BERT implemented in Jittor with training, evaluation, and downstream de
 
 - `model/`: Jittor implementations of BERT and SBERT.
 - `losses/`: The 3 SBERT paper losses plus a custom complex softmax loss, with ablation study support.
+- `heads/`: Extra heads that can be used for downstream tasks.
+
+## Training and evaluation
+
+Training scripts cover NLI pretraining, STS regression fine-tuning, and MR/SST downstream training, while evaluation scripts report Pearson/Spearman on STS benchmarks. See the commands below for concrete usage.
 
 ## Datasets
 
