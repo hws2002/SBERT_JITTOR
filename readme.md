@@ -9,6 +9,11 @@ Sentence-BERT implemented in Jittor with training, evaluation, and downstream de
 - Evaluation on STS datasets with Pearson/Spearman.
 - Simple downstream classification demos (MR/SST).
 
+## Project structure
+
+- `model/`: Jittor implementations of BERT and SBERT.
+- `losses/`: The 3 SBERT paper losses plus a custom complex softmax loss, with ablation study support.
+
 ## Datasets
 
 Place raw datasets under `./data`:
