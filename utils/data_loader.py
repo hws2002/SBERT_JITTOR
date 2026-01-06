@@ -507,3 +507,16 @@ def collate_sts(batch: List[Dict]) -> Dict[str, np.ndarray]:
         out["token_type_ids_b"] = np.asarray([b["token_type_ids_b"] for b in batch], dtype=np.int32)
 
     return out
+
+
+def collate_text_classification(batch: List[Dict]) -> Dict[str, np.ndarray]:
+    out = {
+        "input_ids": np.asarray([b["input_ids"] for b in batch], dtype=np.int32),
+        "attention_mask": np.asarray([b["attention_mask"] for b in batch], dtype=np.float32),
+        "labels": np.asarray([b["labels"] for b in batch], dtype=np.int32),
+    }
+
+    if "token_type_ids" in batch[0]:
+        out["token_type_ids"] = np.asarray([b["token_type_ids"] for b in batch], dtype=np.int32)
+
+    return out
