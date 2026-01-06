@@ -106,21 +106,26 @@ def main():
     optimizer = nn.Adam(clf.parameters(), lr=2e-5)
     loss_fn = nn.CrossEntropyLoss()
 
+    num_epochs = 4
     steps_per_epoch = math.ceil(len(train_ds) / batch_size)
-    model.train()
-    clf.train()
-    for step, batch in enumerate(tqdm(train_loader, total=steps_per_epoch, desc="MR train"), 1):
-        jt_batch = _to_jittor_batch_single(batch)
-        reps = model.encode(
-            jt_batch["input_ids"],
-            jt_batch["attention_mask"],
-            jt_batch.get("token_type_ids"),
-        )
-        logits = clf(reps)
-        loss = loss_fn(logits, jt_batch["labels"])
-        optimizer.step(loss)
-        if step >= steps_per_epoch:
-            break
+    for epoch in range(1, num_epochs + 1):
+        model.train()
+        clf.train()
+        for step, batch in enumerate(
+            tqdm(train_loader, total=steps_per_epoch, desc=f"MR train (epoch {epoch})"),
+            1,
+        ):
+            jt_batch = _to_jittor_batch_single(batch)
+            reps = model.encode(
+                jt_batch["input_ids"],
+                jt_batch["attention_mask"],
+                jt_batch.get("token_type_ids"),
+            )
+            logits = clf(reps)
+            loss = loss_fn(logits, jt_batch["labels"])
+            optimizer.step(loss)
+            if step >= steps_per_epoch:
+                break
 
     # 5) Evaluate on validation + test set
     def eval_loop(loader, name, dataset_len):
