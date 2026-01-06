@@ -15,8 +15,7 @@ hf/
 .ipynb_*
 
 debug/
-=========
-debug/
+debug*.py
 result/
 
 test.py
