@@ -44,6 +44,26 @@ python training/sts/train_sts.py bert-base-uncased \
   --use_cuda
 ```
 
+STS (regression) after NLI checkpoint:
+
+```bash
+python training/sts/train_sts.py bert-base-uncased \
+  --data_dir ./data \
+  --train_dataset STS-B \
+  --train_split train \
+  --eval_dataset STS-B \
+  --eval_split validation \
+  --test_dataset STS-B \
+  --test_split test \
+  --pooling mean \
+  --batch_size 32 \
+  --eval_batch_size 32 \
+  --epochs 1 \
+  --max_length 128 \
+  --use_cuda \
+  --start_from_checkpoints path/to/your/checkpoints/best.pkl
+```
+
 MR / SST:
 
 ```bash
