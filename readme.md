@@ -46,6 +46,8 @@ This uses `pyproject.toml` in the repo root.
 
 ## Train commands
 
+All training hyperparameters used here follow the original SBERT paper.
+
 NLI (SNLI + MultiNLI):
 
 ```bash
