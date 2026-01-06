@@ -82,17 +82,6 @@ def download_multinli(data_dir: str):
 def download_glue(data_dir: str):
     out_root = Path(data_dir)
 
-    stsb = load_dataset("glue", "stsb")
-    for split in ["train", "validation", "test"]:
-        rows = []
-        for item in stsb[split]:
-            score = item.get("label")
-            if score is None:
-                continue
-            rows.append([item["sentence1"], item["sentence2"], float(score)])
-        name = "dev.tsv" if split == "validation" else f"{split}.tsv"
-        _write_tsv(out_root / "STS-B" / name, ["sentence1", "sentence2", "score"], rows)
-
     sst = load_dataset("glue", "sst2")
     for split in ["train", "validation", "test"]:
         rows = []
@@ -102,7 +91,23 @@ def download_glue(data_dir: str):
         name = "dev.tsv" if split == "validation" else f"{split}.tsv"
         _write_tsv(out_root / "SST-2" / name, ["sentence", "label"], rows)
 
-    print(f"GLUE STS-B/SST-2 saved to {out_root}")
+    print(f"GLUE SST-2 saved to {out_root}")
+
+
+def download_sts_benchmark(data_dir: str):
+    out_root = Path(data_dir) / "STS-B"
+    stsb = load_dataset("mteb/stsbenchmark-sts")
+    split_map = {
+        "train": "train.tsv",
+        "validation": "dev.tsv",
+        "test": "test.tsv",
+    }
+    for split, name in split_map.items():
+        rows = []
+        for item in stsb[split]:
+            rows.append([item["sentence1"], item["sentence2"], float(item["score"])])
+        _write_tsv(out_root / name, ["sentence1", "sentence2", "score"], rows)
+    print(f"STS-B (mteb) saved to {out_root}")
 
 
 def _download_sts_dataset(repo_id: str, out_dir: Path):
@@ -165,7 +170,7 @@ if __name__ == "__main__":
             download_snli(args.data_dir)
             download_multinli(args.data_dir)
         if args.sts_only:
-            download_glue(args.data_dir)
+            download_sts_benchmark(args.data_dir)
             download_sts12_16(args.data_dir)
             download_sickr(args.data_dir)
         if args.sst_only:
@@ -175,6 +180,7 @@ if __name__ == "__main__":
     else:
         download_snli(args.data_dir)
         download_multinli(args.data_dir)
+        download_sts_benchmark(args.data_dir)
         download_glue(args.data_dir)
         download_sts12_16(args.data_dir)
         download_sickr(args.data_dir)

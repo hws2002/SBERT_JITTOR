@@ -405,7 +405,19 @@ def prepare_sts_dataset(
 
     sentences_a, sentences_b, scores = _parse_sts_rows(header, rows)
     arrays = _tokenize_pairs(tokenizer, sentences_a, sentences_b, max_length, tokenize_batch_size)
-    arrays["scores"] = np.asarray(scores, dtype=np.float32)
+    scores_arr = np.asarray(scores, dtype=np.float32)
+    # Drop NaN/inf and negative placeholder scores (e.g., GLUE test = -1).
+    if scores_arr.size:
+        mask = np.isfinite(scores_arr) & (scores_arr >= 0)
+        if not np.all(mask):
+            scores_arr = scores_arr[mask]
+            arrays = {k: v[mask] for k, v in arrays.items()}
+    if scores_arr.size == 0:
+        raise ValueError(
+            f"No valid STS scores found for {dataset_name}/{split}. "
+            "If using GLUE STS-B, the test split has -1 labels; use validation."
+        )
+    arrays["scores"] = scores_arr
     _save_npz(cache_path, arrays)
     return NumpyDictDataset(arrays)
 
