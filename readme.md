@@ -2,6 +2,8 @@
 
 Sentence-BERT implemented in Jittor with training, evaluation, and downstream demos.
 
+Tags: jittor, sentence-transformers, sbert, bert, roberta, embedding
+
 ## What this repo does
 
 - Jittor-native BERT encoder + SBERT pooling (mean/cls/max).
