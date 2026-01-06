@@ -1,7 +1,5 @@
 """
 Train SBERTJittor on SST-2 classification.
-
-Mirrors train_mr.py style (warmup, eval, no checkpoint saving).
 """
 
 import argparse

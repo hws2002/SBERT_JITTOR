@@ -1,12 +1,6 @@
 """
 Utility script to download HuggingFace checkpoints (model + tokenizer)
 and store them in a local directory.
-
-Usage:
-    python utils/download_checkpoints.py \
-        --model-name bert-large-uncased \
-        --output-dir ./hf/pretrained_bert_checkpoints/bert-large-uncased \
-        --safe-serialization
 """
 
 import argparse

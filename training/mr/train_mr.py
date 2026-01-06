@@ -1,7 +1,5 @@
 """
 Train SBERTJittor on MR (Rotten Tomatoes) classification.
-
-Mirrors train_nli_gpu.py style (full fine-tuning, warmup, eval, best checkpoint).
 """
 
 import argparse
