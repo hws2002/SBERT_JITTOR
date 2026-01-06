@@ -30,6 +30,7 @@ def evaluate_sts(
     normalize_scores: bool = False,
     score_scale: float = 1.0,
     desc: str = "Evaluating STS",
+    total_batches: Optional[int] = None,
 ) -> Dict[str, float]:
     from scipy.stats import pearsonr, spearmanr
 
@@ -37,8 +38,17 @@ def evaluate_sts(
     all_predictions: List[float] = []
     all_scores: List[float] = []
 
+    if total_batches is None:
+        try:
+            dataset_len = len(getattr(dataloader, "dataset", []))
+            batch_size = getattr(dataloader, "batch_size", None)
+            if batch_size:
+                total_batches = int(np.ceil(dataset_len / batch_size))
+        except Exception:
+            total_batches = None
+
     with jt.no_grad():
-        for batch in tqdm(dataloader, desc=desc, leave=False):
+        for batch in tqdm(dataloader, desc=desc, leave=False, total=total_batches):
             jt_batch = _to_jittor_batch(batch, for_sts=True)
 
             emb_a = model.encode(
