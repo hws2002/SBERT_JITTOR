@@ -205,3 +205,22 @@ emb = model.encode(input_ids, attention_mask, token_type_ids)
 - `demo/general_use.ipynb`: basic SBERTJittor construction, HF loading, and encoding.
 - `demo/evaluation.ipynb`: evaluate a pretrained SBERT on STS-B with Pearson/Spearman.
 - `demo/downstream.ipynb`: attach a classifier head and test transfer on MR.
+
+## Attribution
+
+BERT code based on BERT-Jittor (Apache 2.0): https://github.com/LetianLee/BERT-Jittor
+
+## References
+
+Papers:
+- Reimers, N., & Gurevych, I. (2019). Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks. In Proceedings of EMNLP-IJCNLP. https://aclanthology.org/D19-1410/
+- Devlin, J., Chang, M.-W., Lee, K., & Toutanova, K. (2019). BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding. In Proceedings of NAACL-HLT. https://aclanthology.org/N19-1423/
+
+Datasets:
+- Bowman, S. R., Angeli, G., Potts, C., & Manning, C. D. (2015). A large annotated corpus for learning natural language inference. In Proceedings of EMNLP. (SNLI) https://aclanthology.org/D15-1075/
+- Williams, A., Nangia, N., & Bowman, S. R. (2018). A broad-coverage challenge corpus for sentence understanding through inference. In Proceedings of NAACL-HLT. (MultiNLI) https://aclanthology.org/N18-1101/
+- Cer, D., et al. (2017). SemEval-2017 Task 1: Semantic Textual Similarity. In Proceedings of SemEval. (STS Benchmark) https://aclanthology.org/S17-2001/
+- Agirre, E., et al. (2012-2016). SemEval Semantic Textual Similarity shared tasks. (STS 2012-2016) https://ixa2.si.ehu.eus/stswiki/index.php/Main_Page
+- Marelli, M., et al. (2014). A SICK cure for the evaluation of compositional distributional semantic models. In Proceedings of LREC. (SICK-R) http://clic.cimec.unitn.it/composes/sick.html
+- Pang, B., & Lee, L. (2005). Seeing stars: Exploiting class relationships for sentiment categorization with respect to rating scales. In Proceedings of ACL. (MR) https://aclanthology.org/P05-1015/
+- Socher, R., et al. (2013). Recursive deep models for semantic compositionality over a sentiment treebank. In Proceedings of EMNLP. (SST-2) https://aclanthology.org/D13-1170/
