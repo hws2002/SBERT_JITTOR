@@ -28,8 +28,7 @@ data/
   SST-2/{train,dev,test}.tsv
 ```
 
-Download via Hugging Face datasets and export to local files:
-
+or download via provided script:
 ```bash
 python utils/download_data.py --data_dir ./data
 ```
@@ -43,6 +42,16 @@ pip install -e .
 ```
 
 This uses `pyproject.toml` in the repo root.
+
+Install Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Tokenizer note:
+- Recommended: pre-download a local tokenizer to reduce AutoTokenizer download time.
+- Optional: if missing, AutoTokenizer will download from Hugging Face.
 
 ## Train commands
 
@@ -61,8 +70,10 @@ python training/nli/train_nli.py bert-base-uncased \
   --max_length 128 \
   --use_cuda
 ```
+The first argument (bert-base-uncased) is the encoder model name.  
+You can change it to any other encoder model name. (In the same way as the STS training command)
 
-STS (regression):
+STS :
 
 ```bash
 python training/sts/train_sts.py bert-base-uncased \
@@ -81,7 +92,7 @@ python training/sts/train_sts.py bert-base-uncased \
   --use_cuda
 ```
 
-STS (regression) after NLI checkpoint:
+STS after NLI checkpoint:
 
 ```bash
 python training/sts/train_sts.py bert-base-uncased \
@@ -101,16 +112,14 @@ python training/sts/train_sts.py bert-base-uncased \
   --start_from_checkpoints path/to/your/checkpoints/best.pkl
 ```
 
-MR / SST:
+Provide a pretrained NLI checkpoint path via `--start_from_checkpoints`.
+
+SentEval (MR / SST):
 
 ```bash
 python training/mr/train_mr.py bert-base-uncased --data_dir ./data --pooling mean --use_cuda
 python training/sst/train_sst.py bert-base-uncased --data_dir ./data --pooling mean --use_cuda
 ```
-
-Tokenizer note:
-- Recommended: pre-download a local tokenizer to reduce AutoTokenizer download time.
-- Optional: if missing, AutoTokenizer will download from Hugging Face.
 
 ## Evaluation command
 
@@ -125,7 +134,8 @@ python evaluation/sts/evaluate_sbert.py \
 
 ## SBERTJittor usage
 
-Basic usage patterns:
+### Basic usage patterns:
+
 
 ```python
 from model.sbert_model import SBERTJittor
@@ -148,7 +158,11 @@ model4 = SBERTJittor("bert-base-uncased", pooling="mean", head_type="mlp", outpu
 print(model4.output_dim)
 ```
 
-Load from Hugging Face checkpoint:
+Notes:
+- `pooling` controls the sentence embedding strategy (e.g., mean/cls/max).
+- `head_type` controls the projection head; use `none` for pure SBERT embeddings.
+
+### Load from Hugging Face checkpoint:
 
 ```python
 from model.sbert_model import SBERTJittor
@@ -158,6 +172,8 @@ model, tokenizer, repo_dir = SBERTJittor.from_pretrained(
     return_tokenizer=True,
 )
 ```
+
+This loads the HF repo, initializes the encoder, and returns a ready-to-use tokenizer.
 
 Encoding:
 
@@ -172,8 +188,10 @@ token_type_ids = jt.array(batch["token_type_ids"]) if "token_type_ids" in batch 
 emb = model.encode(input_ids, attention_mask, token_type_ids)
 ```
 
+`emb` is a sentence embedding tensor with shape `[batch, dim]`.
+
 ## Demo notebooks
 
-- `demo/fine-tune.ipynb`: NLI/STS fine-tuning walkthrough
-- `demo/evaluation.ipynb`: STS evaluation workflow
-- `demo/downstream.ipynb`: MR/SST downstream usage
+- `demo/general_use.ipynb`: basic SBERTJittor construction, HF loading, and encoding.
+- `demo/evaluation.ipynb`: evaluate a pretrained SBERT on STS-B with Pearson/Spearman.
+- `demo/downstream.ipynb`: attach a classifier head and test transfer on MR.
