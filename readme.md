@@ -9,6 +9,41 @@ Sentence-BERT implemented in Jittor with training, evaluation, and downstream de
 - Evaluation on STS datasets with Pearson/Spearman.
 - Simple downstream classification demos (MR/SST).
 
+## Datasets
+
+Place raw datasets under `./data`:
+
+```
+data/
+  SNLI/snli_1.0_{train,dev,test}.jsonl
+  MultiNLI/multinli_1.0_{train,dev_matched,dev_mismatched}.jsonl
+  STS-B/{train,dev,test}.tsv
+  STS-12/test.tsv
+  STS-13/test.tsv
+  STS-14/test.tsv
+  STS-15/test.tsv
+  STS-16/test.tsv
+  SICKR/test.tsv
+  MR/{train,validation,test}.tsv
+  SST-2/{train,dev,test}.tsv
+```
+
+Download via Hugging Face datasets and export to local files:
+
+```bash
+python utils/download_data.py --data_dir ./data
+```
+
+## Installation
+
+If you see import errors like `No module named 'model'`, install the repo as a package:
+
+```bash
+pip install -e .
+```
+
+This uses `pyproject.toml` in the repo root.
+
 ## Train commands
 
 NLI (SNLI + MultiNLI):
@@ -75,31 +110,6 @@ Tokenizer note:
 - Recommended: pre-download a local tokenizer to reduce AutoTokenizer download time.
 - Optional: if missing, AutoTokenizer will download from Hugging Face.
 
-### Local dataset layout
-
-Place raw datasets under `./data` (no Hugging Face datasets dependency):
-
-```
-data/
-  SNLI/snli_1.0_{train,dev,test}.jsonl
-  MultiNLI/multinli_1.0_{train,dev_matched,dev_mismatched}.jsonl
-  STS-B/{train,dev,test}.tsv
-  STS-12/test.tsv
-  STS-13/test.tsv
-  STS-14/test.tsv
-  STS-15/test.tsv
-  STS-16/test.tsv
-  SICKR/test.tsv
-  MR/{train,validation,test}.tsv
-  SST-2/{train,dev,test}.tsv
-```
-
-Use the downloader to fetch via Hugging Face datasets and export to local files:
-
-```bash
-python utils/download_data.py --data_dir ./data
-```
-
 ## Evaluation command
 
 Evaluate a Jittor SBERT checkpoint on STS benchmarks:
@@ -113,7 +123,30 @@ python evaluation/sts/evaluate_sbert.py \
 
 ## SBERTJittor usage
 
-Load from Hugging Face:
+Basic usage patterns:
+
+```python
+from model.sbert_model import SBERTJittor
+
+# 1) Basic SBERT (mean pooling)
+model1 = SBERTJittor("bert-base-uncased", pooling="mean", head_type="none")
+print(model1.output_dim)
+
+# 2) RoBERTa SBERT
+model2 = SBERTJittor("roberta-base", pooling="mean", head_type="none")
+print(model2.output_dim)
+print(model2.config.vocab_size, model2.config.max_position_embeddings)
+
+# 3) Linear projection head
+model3 = SBERTJittor("bert-base-uncased", pooling="mean", head_type="linear", output_dim=256)
+print(model3.output_dim)
+
+# 4) MLP projection head
+model4 = SBERTJittor("bert-base-uncased", pooling="mean", head_type="mlp", output_dim=128, num_layers=2)
+print(model4.output_dim)
+```
+
+Load from Hugging Face checkpoint:
 
 ```python
 from model.sbert_model import SBERTJittor
@@ -121,18 +154,6 @@ from model.sbert_model import SBERTJittor
 model, tokenizer, repo_dir = SBERTJittor.from_pretrained(
     "Kyle-han/roberta-base-nli-mean-tokens",
     return_tokenizer=True,
-)
-```
-
-Load with a pretrained flag:
-
-```python
-from model.sbert_model import SBERTJittor
-
-model = SBERTJittor(
-    pretrained=True,
-    model_id="Kyle-han/roberta-base-nli-mean-tokens",
-    pooling="mean",
 )
 ```
 
