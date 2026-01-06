@@ -212,12 +212,18 @@ def _read_nli_jsonl(path: str) -> Tuple[List[str], List[str], List[int]]:
     }
     for row in _read_jsonl(path):
         label = row.get("gold_label", row.get("label"))
-        if label in (None, "-", "-"):
+        if label in (None, "-", "-1"):
             continue
         if isinstance(label, str):
             if label not in label_map:
                 continue
             label = label_map[label]
+        try:
+            label = int(label)
+        except (TypeError, ValueError):
+            continue
+        if label < 0:
+            continue
         sentences_a.append(row.get("sentence1") or row.get("premise"))
         sentences_b.append(row.get("sentence2") or row.get("hypothesis"))
         labels.append(int(label))
